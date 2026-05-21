@@ -13,7 +13,6 @@ from dateutil.parser import parse as parse_date
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from yieldcurves.config import source_config
-from yieldcurves.curves.reconstruct import reconstruct_country_curve
 from yieldcurves.storage import build_row
 
 _CFG = source_config("IT")
@@ -24,9 +23,6 @@ _SOURCE_NAME = "Borsa Italiana MOT"
 _RATE_TYPE = "bond_ytm"
 _CURVE_FAMILY = "nominal_government"
 _FIT_METHOD = "direct_source"
-_RECON_RATE_TYPE = "reconstructed_curve_yield"
-_RECON_CURVE_FAMILY = "reconstructed_nominal_government"
-
 _BTP_EXCLUDE_PATTERNS = re.compile(
     r"(BTP[\s_]?I|BTP\s+Italia|BTP\s+Valore|CCT|Strip|ZC|inflation.linked|indicizzato)",
     re.IGNORECASE,
@@ -291,33 +287,5 @@ def fetch_current_snapshot() -> list[dict[str, Any]]:
     return rows
 
 
-def reconstruct_btp_curve_snapshot(
-    raw_rows: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    if not raw_rows:
-        return []
-    df = pd.DataFrame(raw_rows)
-    obs_dates = df["observation_date"].unique()
-    reconstructed: list[dict[str, Any]] = []
-    for obs_date in obs_dates:
-        group = df[df["observation_date"] == obs_date]
-        points = group[["tenor_years", "rate"]].dropna().to_dict("records")
-        if len(points) < 2:
-            continue
-        curve_rows = reconstruct_country_curve(
-            country=_COUNTRY_CODE,
-            date_str=str(obs_date),
-            points=[(p["tenor_years"], p["rate"]) for p in points],
-            method_priority=["nelson_siegel_svensson", "pchip", "linear"],
-            extrapolation_limits=(0.5, 2.0),
-            rate_type=_RECON_RATE_TYPE,
-            curve_family=_RECON_CURVE_FAMILY,
-        )
-        reconstructed.extend(curve_rows)
-    return reconstructed
-
-
 def fetch_all() -> list[dict[str, Any]]:
-    raw = fetch_current_snapshot()
-    recon = reconstruct_btp_curve_snapshot(raw)
-    return raw + recon
+    return fetch_current_snapshot()

@@ -10,7 +10,6 @@ from dateutil.parser import parse as parse_date
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from yieldcurves.config import source_config
-from yieldcurves.curves.reconstruct import reconstruct_country_curve
 from yieldcurves.curves.tenors import parse_tenor_label
 from yieldcurves.hashing import compute_data_hash
 from yieldcurves.parsers.excel import read_excel_sheets
@@ -130,31 +129,6 @@ def _parse_ods_xlsx(
                     )
                 )
     return rows
-
-
-def _extrapolation_limits() -> tuple[float, float]:
-    limits = _CFG.get("extrapolation", {})
-    return limits.get("short_end_years", 0.5), limits.get("long_end_years", 2.0)
-
-
-def reconstruct_standard_curves(
-    raw_rows: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    if not raw_rows:
-        return []
-    df = pd.DataFrame(raw_rows)
-    reconstructed: list[dict[str, Any]] = []
-    for obs_date, group in df.groupby("observation_date"):
-        points = group[["tenor_years", "rate"]].dropna().to_dict("records")
-        curve_rows = reconstruct_country_curve(
-            country=_COUNTRY_CODE,
-            date_str=str(obs_date),
-            points=[(p["tenor_years"], p["rate"]) for p in points],
-            method_priority=["pchip", "linear"],
-            extrapolation_limits=_extrapolation_limits(),
-        )
-        reconstructed.extend(curve_rows)
-    return reconstructed
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
