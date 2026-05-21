@@ -1,0 +1,99 @@
+sources:
+  japan_mof:
+    enabled: true
+    country_code: JP
+    currency: JPY
+    historical_url: "https://www.mof.go.jp/english/policy/jgbs/reference/interest_rate/historical/jgbcme_all.csv"
+    current_url: "https://www.mof.go.jp/english/policy/jgbs/reference/interest_rate/jgbcme.csv"
+    schedule: "daily"
+    schedule_time: "10:00"
+    schedule_tz: "Asia/Tokyo"
+    rate_type: "constant_maturity_yield"
+    curve_family: "nominal_government"
+    compounding: "semiannual"
+    fit_method: "official"
+
+  uk_boe:
+    enabled: true
+    country_code: GB
+    currency: GBP
+    latest_url: "https://www.bankofengland.co.uk/-/media/boe/files/statistics/yield-curves/latest-yield-curve-data.zip"
+    archives:
+      nominal: "https://www.bankofengland.co.uk/-/media/boe/files/statistics/yield-curves/glcnominalddata.zip"
+      real: "https://www.bankofengland.co.uk/-/media/boe/files/statistics/yield-curves/glcrealddata.zip"
+      inflation: "https://www.bankofengland.co.uk/-/media/boe/files/statistics/yield-curves/glcinflationddata.zip"
+      ois: "https://www.bankofengland.co.uk/-/media/boe/files/statistics/yield-curves/oisddata.zip"
+    schedule: "daily"
+    schedule_time: "13:00"
+    schedule_tz: "Europe/London"
+    curve_families:
+      nominal:
+        rate_type: "zero_spot"
+        compounding: "continuous"
+        fit_method: "official"
+      real:
+        rate_type: "zero_spot"
+        compounding: "continuous"
+        fit_method: "official"
+      inflation:
+        rate_type: "zero_spot"
+        compounding: "continuous"
+        fit_method: "official"
+      ois:
+        rate_type: "ois_zero_spot"
+        compounding: "continuous"
+        fit_method: "official"
+
+  germany_bundesbank:
+    enabled: true
+    country_code: DE
+    currency: EUR
+    api_base: "https://api.statistiken.bundesbank.de/rest"
+    dataflow: "BBSIS"
+    schedule: "daily"
+    schedule_time: "18:00"
+    schedule_tz: "Europe/Berlin"
+    rate_type: "par_yield"
+    curve_family: "nominal_government"
+    compounding: "annual"
+    fit_method: "official"
+
+  netherlands_dsta:
+    enabled: true
+    country_code: NL
+    currency: EUR
+    urls:
+      from_2010: "https://english.dsta.nl/site/binaries/site-content/collections/documents/2026/04/30/yields-on-dsls-from-2010-onwards/mts-fixings-publicatie.ods"
+      from_2002_to_2009: "https://english.dsta.nl/site/binaries/site-content/collections/documents/2010/09/01/yields-on-dsls-from-2002-to-2009/mts-fixings-van-2002-tot-en-met-2009.xlsx"
+    schedule: "monthly"
+    revision_window_days: 10
+    extrapolation:
+      short_end_years: 0.5
+      long_end_years: 2.0
+
+  italy_borsa:
+    enabled: true
+    country_code: IT
+    currency: EUR
+    list_url: "https://www.borsaitaliana.it/borsa/obbligazioni/mot/btp/lista.html?lang=en&page={page}"
+    detail_url: "https://www.borsaitaliana.it/borsa/obbligazioni/mot/btp/scheda/{isin}-MOTX.html?lang=en"
+    schedule: "daily"
+    schedule_time: "18:00"
+    schedule_tz: "Europe/Rome"
+    rate_type: "bond_ytm"
+    curve_family: "nominal_government"
+    reconstructed_rate_type: "reconstructed_curve_yield"
+    reconstructed_curve_family: "reconstructed_nominal_government"
+    scraper:
+      min_delay_seconds: 1.0
+      user_agent: "Mozilla/5.0 (compatible; YieldCurveBot/1.0; +https://github.com/example/yield-curve-bot)"
+      max_retries: 3
+      backoff_factor: 2.0
+
+  italy_bancaditalia:
+    enabled: false
+    country_code: IT
+    currency: EUR
+    curve_family: "benchmark_government"
+    rate_type: "benchmark_government_yield"
+    fit_method: "direct_source"

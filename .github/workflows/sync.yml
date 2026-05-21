@@ -1,0 +1,109 @@
+name: Sync yield curves
+
+on:
+  schedule:
+    # Japan: daily 10:00 Tokyo = 01:00 UTC in winter, 00:00 UTC in summer
+    - cron: "30 1 * * 1-5"
+    # UK: daily 13:00 London = 12:00 UTC in winter, 11:00 UTC in summer
+    - cron: "30 12 * * 1-5"
+    # Germany / Italy: daily 18:00 CET = 17:00 UTC in winter, 15:00 UTC in summer
+    - cron: "30 16 * * 1-5"
+    # Netherlands: monthly on 3rd at 08:00 CET
+    - cron: "30 7 3 * *"
+  workflow_dispatch:
+    inputs:
+      country:
+        description: "Country to sync (JP, GB, DE, NL, IT, or ALL)"
+        required: true
+        default: "ALL"
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Cache yield curve data
+        uses: actions/cache@v4
+        with:
+          path: data/
+          key: yield-curve-data-${{ github.run_id }}
+          restore-keys: |
+            yield-curve-data-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Determine sync target
+        id: target
+        run: |
+          if [[ "${{ github.event.inputs.country }}" == "" || "${{ github.event.inputs.country }}" == "ALL" ]]; then
+            echo "flag=--all" >> $GITHUB_OUTPUT
+          else
+            echo "flag=--country ${{ github.event.inputs.country }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Sync yield curve data
+        run: |
+          yieldcurves sync ${{ steps.target.outputs.flag }}
+
+      - name: Validate outputs
+        run: |
+          if [ -f data/processed/yield_curves_latest.parquet ]; then
+            echo "=== Data summary ==="
+            python -c "
+import pandas as pd
+df = pd.read_parquet('data/processed/yield_curves_latest.parquet')
+print(f'Total rows: {len(df)}')
+print(f'Countries: {sorted(df[\"country_code\"].unique())}')
+print(f'Date range: {df[\"observation_date\"].min()} to {df[\"observation_date\"].max()}')
+print(f'Rate types: {df[\"rate_type\"].unique()}')
+print(f'Curve families: {df[\"curve_family\"].unique()}')
+"
+            echo "=== DuckDB check ==="
+            python -c "
+import duckdb
+con = duckdb.connect('data/processed/yield_curves.duckdb')
+tables = con.execute(\"SELECT table_name FROM information_schema.tables WHERE table_schema='main'\").fetchall()
+print(f'DuckDB tables: {[t[0] for t in tables]}')
+row_count = con.execute('SELECT count(*) FROM yield_curves_latest').fetchone()[0]
+print(f'DuckDB latest rows: {row_count}')
+con.close()
+"
+          else
+            echo "No data yet -- first sync may be empty until sources are backfilled"
+          fi
+
+      - name: Commit and push updated data
+        run: |
+          git config user.name "yield-curve-bot"
+          git config user.email "yield-curve-bot@users.noreply.github.com"
+          git add data/ metadata/
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update yield curve data [skip ci]"
+            git push
+          fi
+
+      - name: Upload artifacts (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: yield-curve-data
+          path: data/
+          retention-days: 7

@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+env/
+venv/
+.venv/
+
+# Data (track metadata and processed but not raw by default)
+data/raw/*.csv
+data/raw/*.zip
+data/raw/*.xlsx
+data/raw/*.ods
+!data/raw/.gitkeep
+
+# DuckDB write-ahead log and temporary files
+*.wal
+*.tmp
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Pytest
+.pytest_cache/
+
+# Ruff
+.ruff_cache/
+
+# Mypy
+.mypy_cache/
