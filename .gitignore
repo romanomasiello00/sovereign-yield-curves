@@ -13,8 +13,9 @@ data/raw/*.xlsx
 data/raw/*.ods
 !data/raw/.gitkeep
 
-# DuckDB write-ahead log and temporary files
-*.wal
+# DuckDB (regenerated from Parquet on sync via sync_duckdb_after_write)
+*.duckdb
+*.duckdb.wal
 *.tmp
 
 # IDE
