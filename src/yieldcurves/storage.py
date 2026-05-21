@@ -170,6 +170,36 @@ def open_duckdb() -> duckdb.DuckDBPyConnection:
     return duckdb.connect(str(duckdb_path()))
 
 
+def bds_dir() -> Path:
+    p = _base_dir() / "bds"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def bds_raw_dir() -> Path:
+    p = bds_dir() / "raw"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def bds_catalog_path() -> Path:
+    return bds_dir() / "series_catalog.parquet"
+
+
+def bds_data_path(tier: str) -> Path:
+    p = bds_dir() / tier
+    p.mkdir(parents=True, exist_ok=True)
+    return p / "observations.parquet"
+
+
+def bds_duckdb_path() -> Path:
+    return bds_dir() / "bds.duckdb"
+
+
+def open_bds_duckdb() -> duckdb.DuckDBPyConnection:
+    return duckdb.connect(str(bds_duckdb_path()))
+
+
 def _table_exists(con: duckdb.DuckDBPyConnection, name: str) -> bool:
     result = con.execute(
         "SELECT count(*) FROM information_schema.tables WHERE table_name = ?", [name]

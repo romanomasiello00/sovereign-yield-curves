@@ -18,6 +18,9 @@ data/raw/*.ods
 *.duckdb.wal
 *.tmp
 
+# BDS publication data (regenerated from A2A API)
+data/bds/
+
 # IDE
 .idea/
 .vscode/

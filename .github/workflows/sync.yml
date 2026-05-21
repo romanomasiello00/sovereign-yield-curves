@@ -10,10 +10,18 @@ on:
     - cron: "30 16 * * 1-5"
     # Netherlands: monthly on 3rd at 08:00 CET
     - cron: "30 7 3 * *"
+    # BDS monthly publications (SDDS, MFN, BAM, BOP, FPI, STAFINRA): 10th monthly
+    - cron: "0 8 10 * *"
+    # BDS quarterly publications (CFI, STACORIS): 15th of Feb/May/Aug/Nov
+    - cron: "0 8 15 2,5,8,11 *"
+    # BDS annual publications (FPR, FPE): 30th of April
+    - cron: "0 8 30 4 *"
+    # BDS semi-annual (STAATER, STASDP): 30th of April and October
+    - cron: "0 8 30 4,10 *"
   workflow_dispatch:
     inputs:
-      country:
-        description: "Country to sync (JP, GB, DE, NL, IT, or ALL)"
+      target:
+        description: "Sync target (JP, GB, DE, NL, IT, ALL, BDS, ALL_BDS, or ALL)"
         required: true
         default: "ALL"
 
@@ -51,18 +59,33 @@ jobs:
       - name: Determine sync target
         id: target
         run: |
-          if [[ "${{ github.event.inputs.country }}" == "" || "${{ github.event.inputs.country }}" == "ALL" ]]; then
+          INPUT="${{ github.event.inputs.target }}"
+          if [[ -z "$INPUT" || "$INPUT" == "ALL" ]]; then
             echo "flag=--all" >> $GITHUB_OUTPUT
+            echo "bds_flag=" >> $GITHUB_OUTPUT
+          elif [[ "$INPUT" == "BDS" || "$INPUT" == "ALL_BDS" ]]; then
+            echo "flag=" >> $GITHUB_OUTPUT
+            echo "bds_flag=--workers 4" >> $GITHUB_OUTPUT
           else
-            echo "flag=--country ${{ github.event.inputs.country }}" >> $GITHUB_OUTPUT
+            echo "flag=--country $INPUT" >> $GITHUB_OUTPUT
+            echo "bds_flag=" >> $GITHUB_OUTPUT
           fi
 
       - name: Sync yield curve data
+        if: steps.target.outputs.flag != ''
         run: |
           yieldcurves sync ${{ steps.target.outputs.flag }}
 
+      - name: Sync BDS data
+        if: steps.target.outputs.bds_flag != '' || steps.target.outputs.flag == '--all'
+        run: |
+          yieldcurves bds sync -w 4
+
       - name: Validate outputs
-        run: python scripts/validate_outputs.py
+        run: |
+          if [ -f scripts/validate_outputs.py ]; then
+            python scripts/validate_outputs.py
+          fi
 
       - name: Commit and push updated data
         run: |

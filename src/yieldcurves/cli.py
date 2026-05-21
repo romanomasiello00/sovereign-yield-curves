@@ -7,6 +7,7 @@ import click
 import pandas as pd
 
 from yieldcurves import storage
+from yieldcurves.bds import pipeline as bds_pipeline
 from yieldcurves.config import source_config
 from yieldcurves.curves.tenors import standard_tenor_grid
 from yieldcurves.hashing import compute_data_hash
@@ -219,6 +220,209 @@ def tenors():
     click.echo("Standard tenor grid:")
     for t in grid:
         click.echo(f"  {t['label']:>5s} = {t['years']:>8.6f} years")
+
+
+@cli.group()
+def bds():
+    """Banca d'Italia BDS publications management."""
+
+
+@bds.command(name="sync")
+@click.option("--workers", "-w", default=3, help="Parallel download workers")
+@click.option("--skip-download", is_flag=True, help="Use cached ZIPs only")
+@click.option("--publication", "-p", default=None, help="Single publication code (e.g. SDDS)")
+def bds_sync(workers: int, skip_download: bool, publication: Optional[str]):
+    """Download and process BDS publications.
+
+    Downloads publication-level ZIPs from the A2A API, parses metadata,
+    scores series, and stores into tiers (core_5k, core_20k, archive).
+    """
+    click.echo("Syncing BDS publications...")
+    try:
+        results = bds_pipeline.sync_all(
+            skip_download=skip_download,
+            max_workers=workers,
+            publication=publication,
+        )
+        success = [r for r in results if r["status"] == "success"]
+        failed = [r for r in results if r["status"] != "success"]
+
+        click.echo("\nResults:")
+        click.echo(f"  Success: {len(success)} publications")
+        click.echo(f"  Failed:  {len(failed)} publications")
+
+        total_catalog = 0
+        total_core_5k = 0
+        total_core_20k = 0
+        total_archive = 0
+        for r in success:
+            total_catalog += r.get("catalog_count", 0)
+            total_core_5k += r.get("core_5k_count", 0)
+            total_core_20k += r.get("core_20k_count", 0)
+            total_archive += r.get("archive_count", 0)
+            click.echo(
+                f"  {r['publication_code']}: "
+                f"{r['catalog_count']} series "
+                f"({r['core_5k_count']} core_5k, "
+                f"{r['core_20k_count']} core_20k, "
+                f"{r['archive_count']} archive)"
+            )
+
+        click.echo("\nTotals:")
+        click.echo(f"  Catalog series: {total_catalog}")
+        click.echo(f"  Core 5k obs:    {total_core_5k}")
+        click.echo(f"  Core 20k obs:   {total_core_20k}")
+        click.echo(f"  Archive obs:    {total_archive}")
+
+        if failed:
+            click.echo("\nFailed publications:")
+            for r in failed:
+                click.echo(f"  {r['publication_code']}: {r.get('error')}")
+
+    except Exception as e:
+        click.echo(f"Error syncing BDS: {e}", err=True)
+
+
+@bds.command()
+def catalog():
+    """Show BDS series catalog summary."""
+    cat_path = storage.bds_catalog_path()
+    if not cat_path.exists():
+        click.echo("No catalog found. Run 'yieldcurves bds sync' first.")
+        return
+
+    df = pd.read_parquet(cat_path)
+    click.echo(f"Series catalog: {len(df)} series")
+
+    click.echo("\nBy publication:")
+    pub_counts = df["publication_code"].value_counts().sort_index()
+    for pub, count in pub_counts.items():
+        click.echo(f"  {pub}: {count}")
+
+    click.echo("\nBy tier:")
+    tier_counts = df["tier"].value_counts()
+    for tier, count in tier_counts.items():
+        click.echo(f"  {tier}: {count}")
+
+    click.echo("\nBy frequency:")
+    freq_counts = df["frequency_label"].value_counts()
+    for freq, count in freq_counts.items():
+        click.echo(f"  {freq}: {count}")
+
+    click.echo("\nTop 10 series by score:")
+    top = df.nlargest(10, "score")[
+        ["series_id", "publication_code", "series_name", "score", "tier"]
+    ]
+    for _, row in top.iterrows():
+        click.echo(
+            f"  {row['series_id'][:50]:50s} "
+            f"{row['publication_code']:4s} "
+            f"{row['score']:8.2f} "
+            f"{row['tier']:8s}"
+        )
+
+
+@bds.command()
+@click.option("--tier", "-t", type=click.Choice(["core_5k", "core_20k", "archive"]),
+              help="Filter by tier")
+def stats(tier: Optional[str]):
+    """Show BDS data statistics."""
+    tiers = ["core_5k", "core_20k", "archive"] if tier is None else [tier]
+    for t in tiers:
+        path = storage.bds_data_path(t)
+        if not path.exists():
+            click.echo(f"No data for tier: {t}")
+            continue
+        df = pd.read_parquet(path)
+        click.echo(f"\n{t}:")
+        click.echo(f"  Observations: {len(df)}")
+        click.echo(f"  Series:       {df['series_id'].nunique()}")
+        click.echo(f"  Publications: {df['publication_code'].nunique()}")
+        if "observation_date" in df.columns:
+            dr = f"{df['observation_date'].min()} to {df['observation_date'].max()}"
+            click.echo(f"  Date range:   {dr}")
+        if "value" in df.columns:
+            click.echo(f"  Value range:  {df['value'].min():.4f} to {df['value'].max():.4f}")
+
+
+@bds.command()
+@click.argument("sql", required=False)
+@click.option("--tables", is_flag=True, help="List available tables")
+@click.option("--csv", is_flag=True, help="Output as CSV")
+def query(sql: Optional[str], tables: bool, csv: bool):
+    """Run an ad-hoc SQL query against the BDS DuckDB database.
+
+    Use --tables to list available tables and views.
+    """
+    import duckdb
+
+    db_path = storage.bds_duckdb_path()
+    if not db_path.exists():
+        click.echo("No DuckDB database found. Run 'yieldcurves bds sync' first.")
+        return
+
+    con = duckdb.connect(str(db_path))
+    try:
+        if tables:
+            result = con.execute(
+                "SELECT table_name, table_type FROM information_schema.tables "
+                "WHERE table_schema = 'main' ORDER BY table_type, table_name"
+            ).fetchdf()
+            click.echo("Available tables/views:")
+            for _, row in result.iterrows():
+                click.echo(f"  {row['table_type']:5s} {row['table_name']}")
+            return
+
+        if not sql:
+            click.echo("Provide a SQL query or use --tables to list tables.")
+            return
+
+        result = con.execute(sql).fetchdf()
+        if result.empty:
+            click.echo("Query returned no rows.")
+            return
+
+        if csv:
+            click.echo(result.to_csv(index=False))
+        else:
+            click.echo(result.to_string(index=False))
+    finally:
+        con.close()
+
+
+@bds.command()
+@click.argument("publication", required=False)
+def download(publication: Optional[str]):
+    """Download a single publication ZIP for inspection.
+
+    If PUBLICATION is not specified, downloads all targets.
+    """
+    config = __import__("yaml").safe_load(
+        open(Path(__file__).resolve().parent.parent.parent / "config" / "bds_publications.yaml")
+    )
+    if publication:
+        targets = [t for t in config.get("targets", []) if t["object_id"] == publication.upper()]
+        if not targets:
+            click.echo(f"Unknown publication: {publication}")
+            return
+    else:
+        excluded = {e["object_id"] for e in config.get("exclude", [])}
+        targets = [t for t in config.get("targets", []) if t["object_id"] not in excluded]
+
+    storage.bds_raw_dir().mkdir(parents=True, exist_ok=True)
+
+    for t in targets:
+        code = t["object_id"]
+        url = bds_pipeline._publication_url(code)
+        click.echo(f"Downloading {code}...")
+        try:
+            data = bds_pipeline._download(url)
+            h = compute_data_hash(data)
+            path = storage.bds_raw_dir() / f"{code}_{h[:16]}.zip"
+            path.write_bytes(data)
+            click.echo(f"  Saved to {path} ({len(data)} bytes)")
+        except Exception as e:
+            click.echo(f"  Error: {e}", err=True)
 
 
 if __name__ == "__main__":

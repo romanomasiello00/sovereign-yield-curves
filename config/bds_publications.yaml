@@ -1,0 +1,229 @@
+targets:
+  - object_id: "BAM"
+    object_type: "PUBLICATION"
+    priority: 1
+    theme: "banks_money"
+    description: "Banks and money: national data"
+    release_schedule:
+      frequency: monthly
+      reference_lag_days: 60
+      typical_release_day: 20
+      notes: "Monthly banking statistics, ~60 day lag"
+
+  - object_id: "MFN"
+    object_type: "PUBLICATION"
+    priority: 1
+    theme: "financial_market"
+    description: "Financial market"
+    release_schedule:
+      frequency: monthly
+      reference_lag_days: 45
+      typical_release_day: 15
+      notes: "Financial market statistics, ~45 day lag"
+
+  - object_id: "CFI"
+    object_type: "PUBLICATION"
+    priority: 1
+    theme: "financial_accounts"
+    description: "Financial accounts"
+    release_schedule:
+      frequency: quarterly
+      reference_lag_days: 90
+      typical_release_day: 15
+      notes: "Quarterly financial accounts, ~90 day lag"
+
+  - object_id: "BOP"
+    object_type: "PUBLICATION"
+    priority: 1
+    theme: "balance_of_payments_iip"
+    description: "Balance of payments and international investment position"
+    release_schedule:
+      frequency: monthly
+      reference_lag_days: 45
+      typical_release_day: 15
+      notes: "Monthly BoP, ~45 day lag"
+
+  - object_id: "FPI"
+    object_type: "PUBLICATION"
+    priority: 1
+    theme: "public_debt_borrowing_requirement"
+    description: "Public finance: borrowing requirement and debt"
+    release_schedule:
+      frequency: monthly
+      reference_lag_days: 30
+      typical_release_day: 10
+      notes: "Monthly public finance, ~30 day lag"
+
+  - object_id: "SDDS"
+    object_type: "PUBLICATION"
+    priority: 1
+    theme: "core_sdds_plus"
+    description: "IMF SDDS Plus indicators"
+    release_schedule:
+      frequency: monthly
+      reference_lag_days: 30
+      typical_release_day: 10
+      notes: "Monthly IMF SDDS indicators, ~30 day lag"
+
+  - object_id: "STAFINRA"
+    object_type: "PUBLICATION"
+    priority: 2
+    theme: "bank_lending_funding_sector_territory"
+    description: "Bank funding/lending by sector and territory"
+    release_schedule:
+      frequency: monthly
+      reference_lag_days: 75
+      typical_release_day: 25
+      notes: "Monthly bank lending, ~75 day lag"
+
+  - object_id: "STACORIS"
+    object_type: "PUBLICATION"
+    priority: 2
+    theme: "credit_risk_sector_territory"
+    description: "Credit conditions and risk by sector/territory"
+    release_schedule:
+      frequency: quarterly
+      reference_lag_days: 90
+      typical_release_day: 15
+      notes: "Quarterly credit risk, ~90 day lag"
+
+  - object_id: "STAATER"
+    object_type: "PUBLICATION"
+    priority: 2
+    theme: "bank_branch_network"
+    description: "Branch network"
+    release_schedule:
+      frequency: semi_annual
+      reference_lag_days: 120
+      typical_release_day: 30
+      notes: "Semi-annual branch network, ~120 day lag"
+
+  - object_id: "FPR"
+    object_type: "PUBLICATION"
+    priority: 2
+    theme: "local_government_debt"
+    description: "Local government debt"
+    release_schedule:
+      frequency: annual
+      reference_lag_days: 180
+      typical_release_day: 30
+      notes: "Annual local government debt"
+
+  - object_id: "FPE"
+    object_type: "PUBLICATION"
+    priority: 2
+    theme: "eu_public_finance"
+    description: "EU public finance statistics"
+    release_schedule:
+      frequency: annual
+      reference_lag_days: 270
+      typical_release_day: 30
+      notes: "Annual EU public finance"
+
+  - object_id: "STASDP"
+    object_type: "PUBLICATION"
+    priority: 2
+    theme: "payment_system"
+    description: "Payment system statistics"
+    release_schedule:
+      frequency: semi_annual
+      reference_lag_days: 120
+      typical_release_day: 30
+      notes: "Semi-annual payment system"
+
+exclude:
+  - object_id: "EXSTA"
+    reason: "no longer updated"
+  - object_id: "SST"
+    reason: "historical tables; not active-update"
+
+scoring:
+  frequency_scores:
+    D: 1.00
+    M: 0.90
+    Q: 0.75
+    S: 0.45
+    A: 0.30
+    unknown: 0.10
+
+  category_keywords:
+    high:
+      keywords:
+        - "yield"
+        - "rate"
+        - "interest"
+        - "debt"
+        - "monetary aggregate"
+        - "credit"
+        - "loan"
+        - "deposit"
+        - "balance of payment"
+        - "current account"
+        - "financial account"
+        - "reserve"
+        - "money supply"
+        - "broad money"
+        - "m3"
+        - "m2"
+        - "m1"
+        - "government bond"
+        - "btp"
+        - "treasury bill"
+        - "bop"
+        - "iip"
+        - "gdp"
+        - "inflation"
+        - "cpi"
+        - "external"
+        - "export"
+        - "import"
+        - "security"
+        - "asset"
+        - "liabilit"
+        - "financial account"
+        - "non-performing"
+        - "npl"
+      score: 1.00
+    medium:
+      keywords:
+        - "public finance"
+        - "borrowing"
+        - "budget"
+        - "fiscal"
+        - "tax"
+        - "payment"
+        - "card"
+        - "transfer"
+        - "branch"
+        - "banking"
+        - "local government"
+        - "regional"
+        - "territor"
+        - "province"
+        - "municipal"
+      score: 0.80
+    low:
+      keywords:
+        - "survey"
+        - "household"
+        - "historical"
+        - "archive"
+        - "discontinued"
+      score: 0.40
+    default: 0.60
+
+  weights:
+    frequency: 30
+    recency: 25
+    importance: 25
+    history_length: 10
+    metadata_quality: 10
+    stale_penalty: -50
+
+  recency:
+    stale_days: 365
+    max_score_days: 7
+
+  tier_thresholds:
+    core_5k: 5000
+    core_20k: 20000
