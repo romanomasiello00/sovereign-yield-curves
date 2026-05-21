@@ -106,13 +106,19 @@ def _scrape_list_page(page: int) -> list[dict[str, Any]]:
     html = _fetch_page(url)
     soup = BeautifulSoup(html, "lxml")
     bonds: list[dict[str, Any]] = []
-    rows = soup.select("table tbody tr")
+    table = soup.find("table", class_="m-table")
+    if table is None:
+        return bonds
+    rows = table.find_all("tr")
     for tr in rows:
         cells = tr.find_all("td")
         if len(cells) < 5:
             continue
-        isin_tag = cells[0].find("a")
-        isin = isin_tag.get_text(strip=True) if isin_tag else cells[0].get_text(strip=True)
+        a_tag = cells[0].find("a")
+        href = a_tag.get("href", "") if a_tag else ""
+        isin = href.split("/scheda/")[-1].split("-MOTX")[0] if "/scheda/" in href else ""
+        if not isin:
+            continue
         desc = cells[1].get_text(strip=True) if len(cells) > 1 else ""
         price = _safe_float(cells[2].get_text(strip=True)) if len(cells) > 2 else None
         coupon = _safe_float(cells[3].get_text(strip=True)) if len(cells) > 3 else None

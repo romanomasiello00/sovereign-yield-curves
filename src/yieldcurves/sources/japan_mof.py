@@ -48,7 +48,15 @@ def _parse_tenor_from_header(header: str) -> float | None:
 
 
 def _parse_csv(data: bytes, source_url: str) -> list[dict[str, Any]]:
-    df = read_csv_from_bytes(data)
+    text = data.decode("utf-8-sig", errors="replace")
+    lines = text.splitlines()
+    skip = 0
+    for i, line in enumerate(lines):
+        if line.strip().startswith("Interest Rate") or line.strip().startswith("��"):
+            skip = i + 1
+        elif line.strip().upper().startswith("DATE"):
+            break
+    df = read_csv_from_bytes(data, skiprows=skip)
     if df.empty:
         return []
     df.columns = [str(c).strip() for c in df.columns]

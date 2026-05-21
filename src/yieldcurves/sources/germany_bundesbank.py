@@ -69,54 +69,46 @@ def _download_series(key: str, start_date: str | None = None) -> tuple[bytes, st
     return csv_bytes, csv_text
 
 
-def _parse_bbk_csv(csv_text: str, source_url: str) -> list[dict[str, Any]]:
+def _parse_bbk_csv(csv_text: str, source_url: str, maturity_key: str = "") -> list[dict[str, Any]]:
     from io import StringIO
 
-    df = pd.read_csv(StringIO(csv_text), encoding="utf-8-sig")
-    if df.empty:
+    lines = csv_text.splitlines()
+    data_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if ";" not in stripped:
+            continue
+        parts = stripped.split(";")
+        first = parts[0].strip('"').strip()
+        if first.replace("-", "").replace(".", "").isdigit() and len(first) >= 8:
+            data_lines.append(stripped)
+    if not data_lines:
         return []
-    date_col = None
-    for candidate in ("DATE", "date", "Date", "TIME_PERIOD", "time_period"):
-        if candidate in df.columns:
-            date_col = candidate
-            break
-    if date_col is None:
-        date_col = df.columns[0]
-    obs_col = None
-    for candidate in ("OBS_VALUE", "obs_value", "VALUE", "value"):
-        if candidate in df.columns:
-            obs_col = candidate
-            break
-    if obs_col is None:
-        obs_col = df.columns[1] if len(df.columns) > 1 else None
-    if obs_col is None:
+    cleaned = "\n".join(data_lines)
+    df = pd.read_csv(
+        StringIO(cleaned), sep=";", header=None,
+        names=["date", "value_raw", "flag"],
+        encoding="utf-8",
+        dtype={"date": str, "value_raw": str, "flag": str},
+    )
+    ty = _MATURITY_CODE_MAP.get(maturity_key, parse_maturity_code(maturity_key) or 0.0)
+    if ty <= 0:
         return []
-    tenor_key_cols = [c for c in df.columns if c.startswith("R") and "X" in c]
-    key_col = None
-    if tenor_key_cols:
-        key_col = tenor_key_cols[0]
     rows: list[dict[str, Any]] = []
     h = compute_data_hash(csv_text.encode("utf-8"))
-    ts = datetime.utcnow().isoformat()
+    ts = datetime.now().isoformat()
     for _, row in df.iterrows():
-        obs_date = str(row.get(date_col, ""))
+        obs_date = str(row["date"]).strip()
         if not obs_date:
             continue
-        rate_val = row.get(obs_col)
-        if pd.isna(rate_val):
+        rate_raw = str(row["value_raw"]).strip().replace(",", ".")
+        if rate_raw in (".", "", "nan"):
             continue
         try:
-            rate = float(rate_val)
+            rate = float(rate_raw)
         except (ValueError, TypeError):
-            continue
-        if key_col:
-            raw_key = str(row.get(key_col, ""))
-        elif "STRUCTURE" in df.columns:
-            raw_key = str(row.get("STRUCTURE", ""))
-        else:
-            raw_key = ""
-        ty = _MATURITY_CODE_MAP.get(raw_key, parse_maturity_code(raw_key) or 0.0)
-        if ty <= 0:
             continue
         rows.append(
             build_row(
@@ -136,7 +128,7 @@ def _parse_bbk_csv(csv_text: str, source_url: str) -> list[dict[str, Any]]:
                 curve_family=_CURVE_FAMILY,
                 compounding=_COMPOUNDING,
                 day_count="ACT/ACT",
-                source_native_tenor=raw_key,
+                source_native_tenor=maturity_key,
                 source_native_curve_name="Term Structure of Interest Rates",
                 instrument_count_used=None,
                 fit_method=_FIT_METHOD,
@@ -151,11 +143,14 @@ def _parse_bbk_csv(csv_text: str, source_url: str) -> list[dict[str, Any]]:
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-def fetch_series(key: str, start_date: str | None = None) -> list[dict[str, Any]]:
+def fetch_series(
+    key: str, maturity_key: str = "",
+    start_date: str | None = None,
+) -> list[dict[str, Any]]:
     csv_bytes, csv_text = _download_series(key, start_date)
-    save_raw(csv_bytes, f"bundesbank_{key}.csv")
+    save_raw(csv_bytes, f"bundesbank_{maturity_key or 'unknown'}.csv")
     url = f"{_BASE}/data/{_DATAFLOW}/{key}"
-    return _parse_bbk_csv(csv_text, url)
+    return _parse_bbk_csv(csv_text, url, maturity_key=maturity_key)
 
 
 def discover_and_fetch() -> list[dict[str, Any]]:
@@ -163,7 +158,7 @@ def discover_and_fetch() -> list[dict[str, Any]]:
     for maturity_code in _MATURITY_CODE_MAP:
         key = f"D.I.ZAR.ZI.EUR.S1311.B.A604.{maturity_code}.R.A.A._Z._Z.A"
         try:
-            rows.extend(fetch_series(key))
+            rows.extend(fetch_series(key, maturity_key=maturity_code))
         except Exception:
             continue
     return rows
