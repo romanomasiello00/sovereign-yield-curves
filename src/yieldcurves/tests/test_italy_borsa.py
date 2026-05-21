@@ -23,25 +23,23 @@ def test_normalise_date():
 def test_is_valid_btp():
     valid = {
         "issuer": "REPUBLIC OF ITALY",
-        "description": "BTP 3.5% 2030",
         "bond_structure": "Plain Vanilla",
         "annual_coupon_rate": 3.5,
         "gross_ytm": 2.5,
         "expiry_date": "2030-09-15",
     }
-    assert _is_valid_btp(valid)
+    assert _is_valid_btp(valid, description="BTP 3.5% 2030")
 
     invalid_issuer = dict(valid)
     invalid_issuer["issuer"] = "FRENCH REPUBLIC"
-    assert not _is_valid_btp(invalid_issuer)
+    assert not _is_valid_btp(invalid_issuer, description="BTP 3.5% 2030")
 
     invalid_btpi = dict(valid)
-    invalid_btpi["description"] = "BTP Italia 2028"
-    assert not _is_valid_btp(invalid_btpi)
+    assert not _is_valid_btp(invalid_btpi, description="BTP Italia 2028")
 
     invalid_no_ytm = dict(valid)
     invalid_no_ytm["gross_ytm"] = None
-    assert not _is_valid_btp(invalid_no_ytm)
+    assert not _is_valid_btp(invalid_no_ytm, description="BTP 3.5% 2030")
 
 
 def test_compute_maturity_years():

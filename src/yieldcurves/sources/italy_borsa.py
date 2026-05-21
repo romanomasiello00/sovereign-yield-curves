@@ -164,6 +164,8 @@ def _scrape_detail_page(isin: str) -> dict[str, Any]:
                 detail["day_count"] = value
             elif "annual coupon rate" in label:
                 detail["annual_coupon_rate"] = _safe_float(value)
+            elif "periodic coupon rate" in label:
+                detail["periodic_coupon_rate"] = _safe_float(value)
             elif "expiry" in label or "maturity" in label:
                 detail["expiry_date"] = _normalise_date(value)
             elif "reference price date" in label:
@@ -171,23 +173,32 @@ def _scrape_detail_page(isin: str) -> dict[str, Any]:
     return detail
 
 
-def _is_valid_btp(detail: dict[str, Any]) -> bool:
+def _is_valid_btp(detail: dict[str, Any], description: str = "", list_expiry: str = "") -> bool:
     issuer = str(detail.get("issuer", "")).upper()
     if "REPUBLIC OF ITALY" not in issuer and "ITALIAN REPUBLIC" not in issuer:
         return False
-    desc = str(detail.get("description", detail.get("isin", "")))
+    desc = str(description) if description else detail.get("isin", "")
     if _BTP_EXCLUDE_PATTERNS.search(desc):
         return False
     structure = str(detail.get("bond_structure", ""))
-    if structure and "PLAIN VANILLA" not in structure.upper() \
-            and structure.lower() != "plain vanilla":
+    if structure and "plain vanilla" not in structure.lower():
         return False
-    if detail.get("annual_coupon_rate") is None:
+    annual = detail.get("annual_coupon_rate")
+    if annual is None:
+        periodic = detail.get("periodic_coupon_rate")
+        freq = str(detail.get("coupon_frequency", "")).lower()
+        if periodic is not None and freq:
+            mult = 2 if "semi" in freq else 4 if "quarter" in freq else 12 if "month" in freq else 1
+            annual = round(periodic * mult, 6)
+            detail["annual_coupon_rate"] = annual
+    if annual is None:
         return False
     if detail.get("gross_ytm") is None:
         return False
-    if detail.get("expiry_date") is None:
+    expiry = _normalise_date(list_expiry) or detail.get("expiry_date")
+    if expiry is None:
         return False
+    detail["expiry_date"] = expiry
     return True
 
 
@@ -220,7 +231,11 @@ def fetch_current_snapshot() -> list[dict[str, Any]]:
             time.sleep(_CFG["scraper"].get("min_delay_seconds", 1.0))
         except Exception:
             continue
-        if not _is_valid_btp(detail):
+        if not _is_valid_btp(
+            detail,
+            description=bond.get("description", ""),
+            list_expiry=bond.get("expiry", ""),
+        ):
             continue
         b = BTPBond(isin=bond["isin"], description=bond.get("description", ""))
         b.last_price = bond.get("last_price")
