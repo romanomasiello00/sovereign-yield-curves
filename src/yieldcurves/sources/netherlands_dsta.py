@@ -10,7 +10,6 @@ from dateutil.parser import parse as parse_date
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from yieldcurves.config import source_config
-from yieldcurves.curves.tenors import parse_tenor_label
 from yieldcurves.hashing import compute_data_hash
 from yieldcurves.parsers.excel import read_excel_sheets
 from yieldcurves.storage import build_row, ingestion_timestamp, save_raw
@@ -55,6 +54,116 @@ def _parse_yield_column_name(col: str) -> dict[str, Any] | None:
     return {"bond_name": col}
 
 
+def _compute_maturity_years(
+    observation_date: Any,
+    maturity_date: Any,
+) -> float | None:
+    obs = pd.to_datetime(observation_date, errors="coerce")
+    mat = pd.to_datetime(maturity_date, errors="coerce")
+    if pd.isna(obs) or pd.isna(mat):
+        return None
+    years = (mat - obs).days / 365.25
+    if years <= 0:
+        return None
+    return float(years)
+
+
+def _format_tenor_label(years: float) -> str:
+    return f"{int(years * 12)}M" if years < 1 else f"{int(years)}Y"
+
+
+def _find_header_row(df: pd.DataFrame) -> int | None:
+    for idx in range(len(df)):
+        row = [str(v).strip().lower() for v in df.iloc[idx].tolist() if pd.notna(v)]
+        if not row:
+            continue
+        if row[0] not in {"date", "refdate"}:
+            continue
+        if "maturity" not in row:
+            continue
+        if "isin code" not in row:
+            continue
+        if "mid yield" in row or "yield" in row:
+            return idx
+    return None
+
+
+def _parse_sheet_dataframe(
+    df: pd.DataFrame,
+    sheet_name: str,
+    source_url: str,
+    raw_file_hash: str,
+) -> list[dict[str, Any]]:
+    header_row = _find_header_row(df)
+    if header_row is None:
+        return []
+
+    headers = [str(v).strip() if pd.notna(v) else "" for v in df.iloc[header_row].tolist()]
+    data = df.iloc[header_row + 1 :].copy()
+    data.columns = headers
+    data = data.dropna(how="all")
+
+    normalized_columns = {str(col).strip().lower(): col for col in data.columns}
+    date_col = normalized_columns.get("date") or normalized_columns.get("refdate")
+    maturity_col = normalized_columns.get("maturity")
+    isin_col = normalized_columns.get("isin code")
+    description_col = normalized_columns.get("description")
+    rate_col = normalized_columns.get("mid yield") or normalized_columns.get("yield")
+
+    if rate_col is None or date_col is None or maturity_col is None:
+        return []
+
+    rows: list[dict[str, Any]] = []
+    ts = ingestion_timestamp()
+    for _, row in data.iterrows():
+        obs_date = _normalise_date(row.get(date_col))
+        if obs_date is None:
+            continue
+
+        maturity_raw = row.get(maturity_col)
+        maturity_date = _normalise_date(maturity_raw)
+        tenor_years = _compute_maturity_years(row.get(date_col), maturity_raw)
+        if maturity_date is None or tenor_years is None:
+            continue
+
+        rate_val = _safe_float(row.get(rate_col))
+        if rate_val is None:
+            continue
+
+        isin = str(row.get(isin_col) or "").strip() if isin_col else ""
+        source_curve_name = str(row.get(description_col) or sheet_name).strip() if description_col else sheet_name
+        rows.append(
+            build_row(
+                country_code=_COUNTRY_CODE,
+                country_name="Netherlands",
+                currency=_CURRENCY,
+                source_id=_SOURCE_ID,
+                source_name=_SOURCE_NAME,
+                source_url=source_url,
+                observation_date=obs_date,
+                publication_date=obs_date,
+                tenor_label=_format_tenor_label(tenor_years),
+                tenor_years=tenor_years,
+                rate=rate_val,
+                rate_unit="percent",
+                rate_type=_RATE_TYPE,
+                curve_family=_CURVE_FAMILY,
+                compounding="annual",
+                day_count="ACT/ACT",
+                source_native_tenor=isin or maturity_date,
+                source_native_curve_name=source_curve_name,
+                instrument_count_used=None,
+                fit_method=_FIT_METHOD,
+                is_interpolated=False,
+                is_extrapolated=False,
+                data_quality_flag="ok",
+                raw_file_hash=raw_file_hash,
+                ingestion_timestamp=ts,
+            )
+        )
+    return rows
+
+
 def _parse_ods_xlsx(
     data: bytes,
     ext: str,
@@ -72,62 +181,8 @@ def _parse_ods_xlsx(
         import os
         os.unlink(tmp_path)
     rows: list[dict[str, Any]] = []
-    ts = ingestion_timestamp()
     for sheet_name, df in sheets.items():
-        df.columns = [str(c).strip() for c in df.columns]
-        date_col = None
-        for c in df.columns:
-            if c.lower() in ("date", "datum", "observation date", "unnamed: 0"):
-                date_col = c
-                break
-        if date_col is None:
-            continue
-        bond_cols: list[tuple[str, float | None]] = []
-        for c in df.columns:
-            if c == date_col:
-                continue
-            try:
-                ty = parse_tenor_label(c) or float(c.replace("Y", "").replace("y", ""))
-            except (ValueError, TypeError):
-                ty = None
-            bond_cols.append((c, ty))
-        for _, row in df.iterrows():
-            obs_date = _normalise_date(row[date_col])
-            if obs_date is None:
-                continue
-            for col_name, ty in bond_cols:
-                rate_val = _safe_float(row[col_name])
-                if rate_val is None:
-                    continue
-                rows.append(
-                    build_row(
-                        country_code=_COUNTRY_CODE,
-                        country_name="Netherlands",
-                        currency=_CURRENCY,
-                        source_id=_SOURCE_ID,
-                        source_name=_SOURCE_NAME,
-                        source_url=source_url,
-                        observation_date=obs_date,
-                        publication_date=obs_date,
-                        tenor_label=str(ty) if ty else col_name,
-                        tenor_years=float(ty) if ty else 0.0,
-                        rate=rate_val,
-                        rate_unit="percent",
-                        rate_type=_RATE_TYPE,
-                        curve_family=_CURVE_FAMILY,
-                        compounding="annual",
-                        day_count="ACT/ACT",
-                        source_native_tenor=col_name,
-                        source_native_curve_name=sheet_name,
-                        instrument_count_used=None,
-                        fit_method=_FIT_METHOD,
-                        is_interpolated=False,
-                        is_extrapolated=False,
-                        data_quality_flag="ok",
-                        raw_file_hash=raw_file_hash,
-                        ingestion_timestamp=ts,
-                    )
-                )
+        rows.extend(_parse_sheet_dataframe(df, sheet_name, source_url, raw_file_hash))
     return rows
 
 
