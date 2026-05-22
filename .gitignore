@@ -18,8 +18,9 @@ data/raw/*.ods
 *.duckdb.wal
 *.tmp
 
-# BDS publication data (regenerated from A2A API)
-data/bds/
+# BDS raw downloads (large, regenerated from A2A API)
+data/bds/raw/
+!data/bds/raw/.gitkeep
 
 # IDE
 .idea/
