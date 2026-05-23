@@ -33,6 +33,7 @@ _CURVE_SHEET_MAP: dict[str, str] = {
     "fwd curve": "forward",
     "fwds, short end": "forward_short",
 }
+_HEADER_SCAN_ROWS = 12
 
 
 def _normalise_date(val: Any) -> str | None:
@@ -50,6 +51,41 @@ def _normalise_date(val: Any) -> str | None:
     return None
 
 
+def _format_tenor_label(tenor_years: float) -> str:
+    rounded = round(tenor_years, 6)
+    if abs(rounded - round(rounded)) < 1e-6:
+        return f"{int(round(rounded))}Y"
+    return f"{rounded:g}Y"
+
+
+def _canonical_tenor_years(tenor_years: float) -> float:
+    months = round(tenor_years * 12)
+    if months > 0 and abs((months / 12.0) - tenor_years) < 1e-4:
+        return round(months / 12.0, 6)
+    return round(tenor_years, 6)
+
+
+def _sheet_curve_kind(sheet_name: str) -> str | None:
+    lowered = sheet_name.strip().lower()
+    for pattern, curve_kind in _CURVE_SHEET_MAP.items():
+        if pattern in lowered:
+            return curve_kind
+    return None
+
+
+def _infer_curve_label(workbook_name: str) -> str | None:
+    lowered = workbook_name.lower()
+    if "ois" in lowered:
+        return "ois"
+    if "inflation" in lowered:
+        return "inflation"
+    if "real" in lowered:
+        return "real"
+    if "nominal" in lowered:
+        return "nominal"
+    return None
+
+
 def _parse_boe_sheet(
     df_raw: pd.DataFrame,
     source_url: str,
@@ -62,27 +98,23 @@ def _parse_boe_sheet(
         return []
     tenor_row_idx = None
     data_start = None
-    for i in range(min(6, len(df_raw))):
+    for i in range(min(_HEADER_SCAN_ROWS, len(df_raw))):
         first_cell = str(df_raw.iloc[i, 0]).strip().lower()
         if first_cell == "years:" or first_cell == "year:":
             tenor_row_idx = i
-        elif not tenor_row_idx and first_cell == "maturity":
-            continue
-        if i > 0:
-            try:
-                pd.to_datetime(str(df_raw.iloc[i, 0]), errors="raise")
+        if i > 0 and tenor_row_idx is not None and i > tenor_row_idx:
+            parsed_date = pd.to_datetime(df_raw.iloc[i, 0], errors="coerce")
+            if pd.notna(parsed_date):
                 data_start = i
                 break
-            except (ValueError, TypeError):
-                pass
-    if tenor_row_idx is None:
+    if tenor_row_idx is None or data_start is None:
         return []
     tenor_map: dict[int, float] = {}
     for j in range(1, df_raw.shape[1]):
         val = df_raw.iloc[tenor_row_idx, j]
         if pd.notna(val):
             try:
-                ty = float(val)
+                ty = _canonical_tenor_years(float(val))
                 if ty > 0:
                     tenor_map[j] = ty
             except (ValueError, TypeError):
@@ -111,7 +143,7 @@ def _parse_boe_sheet(
                     source_url=source_url,
                     observation_date=obs_date,
                     publication_date=obs_date,
-                    tenor_label=f"{int(ty * 12)}M" if ty < 1 else f"{int(ty)}Y",
+                    tenor_label=_format_tenor_label(ty),
                     tenor_years=ty,
                     rate=rate,
                     rate_unit="percent",
@@ -133,16 +165,21 @@ def _parse_boe_sheet(
     return rows
 
 
-def _process_zip(data: bytes, source_url: str, label: str) -> list[dict[str, Any]]:
+def _process_zip(data: bytes, source_url: str, default_label: str | None) -> list[dict[str, Any]]:
     h = compute_data_hash(data)
     rows: list[dict[str, Any]] = []
-    rate_type, curve_family = _RATE_TYPES.get(label, ("zero_spot", "nominal_government"))
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         for name in zf.namelist():
             if name.startswith("__MACOSX") or not (
                 name.endswith(".xls") or name.endswith(".xlsx")
             ):
                 continue
+            curve_label = default_label or _infer_curve_label(name)
+            if curve_label is None:
+                continue
+            rate_type, curve_family = _RATE_TYPES.get(
+                curve_label, ("zero_spot", "nominal_government")
+            )
             try:
                 content = zf.read(name)
                 xls_data = io.BytesIO(content)
@@ -150,6 +187,9 @@ def _process_zip(data: bytes, source_url: str, label: str) -> list[dict[str, Any
             except Exception:
                 continue
             for sheet_name, df in sheets.items():
+                curve_kind = _sheet_curve_kind(sheet_name)
+                if curve_kind not in {"spot", "spot_short"}:
+                    continue
                 sheet_rows = _parse_boe_sheet(
                     df,
                     source_url,
@@ -174,7 +214,7 @@ def fetch_latest() -> list[dict[str, Any]]:
     url = _CFG["latest_url"]
     data = _download(url)
     save_raw(data, "latest-yield-curve-data.zip")
-    return _process_zip(data, url, "nominal")
+    return _process_zip(data, url, None)
 
 
 def fetch_nominal_archive() -> list[dict[str, Any]]:

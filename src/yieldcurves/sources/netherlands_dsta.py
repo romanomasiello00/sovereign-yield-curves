@@ -11,7 +11,6 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from yieldcurves.config import source_config
 from yieldcurves.hashing import compute_data_hash
-from yieldcurves.parsers.excel import read_excel_sheets
 from yieldcurves.storage import build_row, ingestion_timestamp, save_raw
 
 _CFG = source_config("NL")
@@ -35,103 +34,102 @@ def _normalise_date(val: Any) -> str | None:
         return None
 
 
-def _safe_float(val: Any) -> float | None:
+def _parse_date_dmy(val: Any) -> datetime | None:
     if pd.isna(val):
         return None
+    if isinstance(val, datetime):
+        return val
     try:
-        f = float(val)
-        if np.isfinite(f):
-            return f
-        return None
+        parts = str(val).strip().split("-")
+        if len(parts) == 3 and len(parts[2]) == 4:
+            return datetime(int(parts[2]), int(parts[1]), int(parts[0]))
+        return parse_date(str(val))
     except (ValueError, TypeError):
         return None
 
 
-def _parse_yield_column_name(col: str) -> dict[str, Any] | None:
-    col = str(col).strip()
-    if col.lower() in ("date", "datum", "observation date", "unnamed: 0", ""):
+def _safe_float(val: Any) -> float | None:
+    if pd.isna(val):
         return None
-    return {"bond_name": col}
-
-
-def _compute_maturity_years(
-    observation_date: Any,
-    maturity_date: Any,
-) -> float | None:
-    obs = pd.to_datetime(observation_date, errors="coerce")
-    mat = pd.to_datetime(maturity_date, errors="coerce")
-    if pd.isna(obs) or pd.isna(mat):
+    try:
+        s = str(val).strip().replace(",", "")
+        is_pct = "%" in s
+        s = s.replace("%", "").strip()
+        if not s:
+            return None
+        f = float(s)
+        if not np.isfinite(f):
+            return None
+        return f / 100.0 if is_pct else f
+    except (ValueError, TypeError):
         return None
-    years = (mat - obs).days / 365.25
-    if years <= 0:
-        return None
-    return float(years)
 
 
-def _format_tenor_label(years: float) -> str:
-    return f"{int(years * 12)}M" if years < 1 else f"{int(years)}Y"
-
-
-def _find_header_row(df: pd.DataFrame) -> int | None:
-    for idx in range(len(df)):
-        row = [str(v).strip().lower() for v in df.iloc[idx].tolist() if pd.notna(v)]
-        if not row:
-            continue
-        if row[0] not in {"date", "refdate"}:
-            continue
-        if "maturity" not in row:
-            continue
-        if "isin code" not in row:
-            continue
-        if "mid yield" in row or "yield" in row:
-            return idx
-    return None
-
-
-def _parse_sheet_dataframe(
+def _parse_sheet(
     df: pd.DataFrame,
-    sheet_name: str,
     source_url: str,
     raw_file_hash: str,
+    sheet_name: str,
 ) -> list[dict[str, Any]]:
-    header_row = _find_header_row(df)
-    if header_row is None:
+    """Parse a DSTA sheet with metadata rows, finding the header row dynamically."""
+    header_row = None
+    col_map: dict[str, int] = {}
+
+    for i in range(min(20, len(df))):
+        row = df.iloc[i]
+        vals = [str(v).strip().lower() for v in row if pd.notna(v)]
+        if any("date" in v for v in vals) and any("isin" in v for v in vals):
+            header_row = i
+            for j, v in enumerate(row):
+                raw = str(v).strip().lower()
+                if raw == "date" or raw == "refdate":
+                    col_map["date"] = j
+                elif "maturity" in raw and "year" not in raw:
+                    col_map["maturity"] = j
+                elif "yield" in raw:
+                    col_map["yield"] = j
+                elif "isin" in raw:
+                    col_map["isin"] = j
+            break
+
+    if header_row is None or "date" not in col_map or "yield" not in col_map:
         return []
 
-    headers = [str(v).strip() if pd.notna(v) else "" for v in df.iloc[header_row].tolist()]
-    data = df.iloc[header_row + 1 :].copy()
-    data.columns = headers
-    data = data.dropna(how="all")
-
-    normalized_columns = {str(col).strip().lower(): col for col in data.columns}
-    date_col = normalized_columns.get("date") or normalized_columns.get("refdate")
-    maturity_col = normalized_columns.get("maturity")
-    isin_col = normalized_columns.get("isin code")
-    description_col = normalized_columns.get("description")
-    rate_col = normalized_columns.get("mid yield") or normalized_columns.get("yield")
-
-    if rate_col is None or date_col is None or maturity_col is None:
-        return []
-
+    data_start = header_row + 1
     rows: list[dict[str, Any]] = []
     ts = ingestion_timestamp()
-    for _, row in data.iterrows():
-        obs_date = _normalise_date(row.get(date_col))
+    date_col = col_map["date"]
+    yield_col = col_map["yield"]
+    isin_col = col_map.get("isin")
+    maturity_col = col_map.get("maturity")
+
+    for idx in range(data_start, len(df)):
+        obs_date_val = df.iloc[idx, date_col]
+        obs_date = _normalise_date(obs_date_val)
         if obs_date is None:
             continue
 
-        maturity_raw = row.get(maturity_col)
-        maturity_date = _normalise_date(maturity_raw)
-        tenor_years = _compute_maturity_years(row.get(date_col), maturity_raw)
-        if maturity_date is None or tenor_years is None:
+        yield_val = _safe_float(df.iloc[idx, yield_col])
+        if yield_val is None:
             continue
 
-        rate_val = _safe_float(row.get(rate_col))
-        if rate_val is None:
+        isin = str(df.iloc[idx, isin_col]) if isin_col is not None else ""
+        isin = isin.strip() if isin else sheet_name
+
+        maturity_date = None
+        if maturity_col is not None:
+            maturity_date = _parse_date_dmy(df.iloc[idx, maturity_col])
+
+        if maturity_date is not None and isinstance(parse_date(obs_date), datetime):
+            obs_dt = parse_date(obs_date)
+            delta = (maturity_date - obs_dt).days
+            tenor_years = delta / 365.25 if delta > 0 else 0.0
+        else:
+            tenor_years = 0.0
+
+        if tenor_years <= 0:
             continue
 
-        isin = str(row.get(isin_col) or "").strip() if isin_col else ""
-        source_curve_name = str(row.get(description_col) or sheet_name).strip() if description_col else sheet_name
         rows.append(
             build_row(
                 country_code=_COUNTRY_CODE,
@@ -142,16 +140,18 @@ def _parse_sheet_dataframe(
                 source_url=source_url,
                 observation_date=obs_date,
                 publication_date=obs_date,
-                tenor_label=_format_tenor_label(tenor_years),
+                tenor_label=(
+                    f"{int(tenor_years * 12)}M" if tenor_years < 1 else f"{int(tenor_years)}Y"
+                ),
                 tenor_years=tenor_years,
-                rate=rate_val,
+                rate=round(yield_val * 100, 6),
                 rate_unit="percent",
                 rate_type=_RATE_TYPE,
                 curve_family=_CURVE_FAMILY,
                 compounding="annual",
                 day_count="ACT/ACT",
-                source_native_tenor=isin or maturity_date,
-                source_native_curve_name=source_curve_name,
+                source_native_tenor=isin,
+                source_native_curve_name=sheet_name,
                 instrument_count_used=None,
                 fit_method=_FIT_METHOD,
                 is_interpolated=False,
@@ -164,26 +164,69 @@ def _parse_sheet_dataframe(
     return rows
 
 
-def _parse_ods_xlsx(
-    data: bytes,
-    ext: str,
-    source_url: str,
-    raw_file_hash: str,
-) -> list[dict[str, Any]]:
+def _parse(data: bytes, ext: str, source_url: str, raw_file_hash: str) -> list[dict[str, Any]]:
     import tempfile
 
     with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
         tmp.write(data)
         tmp_path = tmp.name
     try:
-        sheets = read_excel_sheets(tmp_path)
+        rows: list[dict[str, Any]] = []
+        if ext == ".ods":
+            from odf.namespaces import OFFICENS
+            from odf.opendocument import load as ods_load
+            from odf.table import Table, TableCell, TableRow
+            from odf.text import P
+
+            doc = ods_load(tmp_path)
+            for table in doc.getElementsByType(Table):
+                sheet_name = table.getAttribute("name")
+                odf_rows = table.getElementsByType(TableRow)
+                sheet_data: list[list[Any]] = []
+                for odf_row in odf_rows:
+                    cells = odf_row.getElementsByType(TableCell)
+                    row_vals: list[Any] = []
+                    for cell in cells:
+                        val = None
+                        text_parts = []
+                        for p in cell.getElementsByType(P):
+                            for child in p.childNodes:
+                                if hasattr(child, "data"):
+                                    text_parts.append(child.data)
+                        if text_parts:
+                            val = "".join(text_parts)
+                        office_val = cell.getAttrNS(OFFICENS, "value")
+                        if office_val is not None:
+                            try:
+                                val = float(office_val)
+                            except (ValueError, TypeError):
+                                pass
+                        date_val = cell.getAttrNS(OFFICENS, "date-value")
+                        if date_val is not None:
+                            try:
+                                from datetime import datetime
+                                val = datetime.strptime(date_val.split("T")[0], "%Y-%m-%d")
+                            except (ValueError, TypeError):
+                                val = str(date_val)
+                        row_vals.append(val)
+                    while row_vals and row_vals[-1] is None:
+                        row_vals.pop()
+                    if row_vals:
+                        sheet_data.append(row_vals)
+                if sheet_data:
+                    max_cols = max(len(r) for r in sheet_data)
+                    padded = [r + [None] * (max_cols - len(r)) for r in sheet_data]
+                    df = pd.DataFrame(padded)
+                    rows.extend(_parse_sheet(df, source_url, raw_file_hash, sheet_name))
+        else:
+            xls = pd.ExcelFile(tmp_path, engine="openpyxl")
+            for sheet_name in xls.sheet_names:
+                df = pd.read_excel(tmp_path, sheet_name=sheet_name, engine="openpyxl", header=None)
+                rows.extend(_parse_sheet(df, source_url, raw_file_hash, sheet_name))
+        return rows
     finally:
         import os
         os.unlink(tmp_path)
-    rows: list[dict[str, Any]] = []
-    for sheet_name, df in sheets.items():
-        rows.extend(_parse_sheet_dataframe(df, sheet_name, source_url, raw_file_hash))
-    return rows
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
@@ -198,7 +241,7 @@ def fetch_from_2010() -> list[dict[str, Any]]:
     data = _download(url)
     save_raw(data, "mts-fixings-publicatie.ods")
     h = compute_data_hash(data)
-    return _parse_ods_xlsx(data, ".ods", url, h)
+    return _parse(data, ".ods", url, h)
 
 
 def fetch_2002_to_2009() -> list[dict[str, Any]]:
@@ -206,7 +249,7 @@ def fetch_2002_to_2009() -> list[dict[str, Any]]:
     data = _download(url)
     save_raw(data, "mts-fixings-van-2002-tot-en-met-2009.xlsx")
     h = compute_data_hash(data)
-    return _parse_ods_xlsx(data, ".xlsx", url, h)
+    return _parse(data, ".xlsx", url, h)
 
 
 def fetch_all() -> list[dict[str, Any]]:

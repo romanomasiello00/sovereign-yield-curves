@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+import io
+import zipfile
 from typing import Any
 
-import pandas as pd
 import requests
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from yieldcurves.config import source_config
-from yieldcurves.storage import build_row
+from yieldcurves.storage import build_row, ingestion_timestamp
 
-_CFG = source_config("IT")  # shares IT in config
+_CFG = source_config("IT")
 _COUNTRY_CODE = "IT"
 _CURRENCY = "EUR"
 _SOURCE_ID = "italy_bancaditalia"
@@ -18,34 +18,59 @@ _CURVE_FAMILY = "benchmark_government"
 _RATE_TYPE = "benchmark_government_yield"
 _FIT_METHOD = "direct_source"
 
-_BDS_BASE = "https://bds.infostat.it/bds"
+_A2A_BASE = "https://a2a.bancaditalia.it/infostat/dataservices"
+
+# BMK0200 column code -> (label, tenor_years)
+_TENOR_MAP: dict[str, tuple[str, float | None]] = {
+    "MFN_BMK.D.020.922.0.EUR.203": ("3Y", 3.0),
+    "MFN_BMK.D.020.922.0.EUR.205": ("5Y", 5.0),
+    "MFN_BMK.D.020.922.0.EUR.210": ("10Y", 10.0),
+    "MFN_BMK.D.020.922.0.EUR.230": ("30Y", 30.0),
+}
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-def fetch_bmk0200() -> pd.DataFrame:
-    url = f"{_BDS_BASE}/api/v1/dataset/BMK0200/data"
-    params = {"format": "csv", "lang": "en"}
-    resp = requests.get(url, params=params, timeout=60)
+def _a2a_download(table_id: str) -> str:
+    url = f"{_A2A_BASE}/export/EN/CSV/DATA/CUBE/BANKITALIA/DIFF/{table_id}"
+    resp = requests.get(url, timeout=60)
     resp.raise_for_status()
-    from io import StringIO
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
+        csv_name = [f for f in z.namelist() if f.endswith(".csv")][0]
+        return z.read(csv_name).decode("latin1")
 
-    df = pd.read_csv(StringIO(resp.text))
-    return df
 
-
-def parse_bmk0200(df: pd.DataFrame) -> list[dict[str, Any]]:
+def _parse_bmk0200_csv(csv_text: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for _, row in df.iterrows():
-        obs_date = str(row.get("date", row.get("DATA", "")))
-        tenor_cols = [c for c in df.columns if c not in ("date", "DATA", "time", "TEMPO")]
-        for col in tenor_cols:
-            rate_val = row.get(col)
-            if pd.isna(rate_val):
+    ts = ingestion_timestamp()
+    lines = csv_text.strip().split("\n")
+    if not lines:
+        return []
+
+    headers = [h.strip().strip('"') for h in lines[0].split(";")]
+    data_cols: list[tuple[int, str, float]] = []
+    for i, h in enumerate(headers[1:], 1):
+        if h in _TENOR_MAP:
+            label, ty = _TENOR_MAP[h]
+            if ty is not None:
+                data_cols.append((i, label, ty))
+
+    for line in lines[1:]:
+        parts = [p.strip().strip('"') for p in line.split(";")]
+        if len(parts) != len(headers):
+            continue
+        date_str = parts[0]
+        if not date_str:
+            continue
+        obs_date = date_str.replace("/", "-")
+
+        for col_idx, label, ty in data_cols:
+            raw = parts[col_idx] if col_idx < len(parts) else ""
+            if not raw:
                 continue
             try:
-                tenor_years = float(col.replace("Y", "").replace("y", ""))
+                rate = float(raw)
             except (ValueError, TypeError):
                 continue
+
             rows.append(
                 build_row(
                     country_code=_COUNTRY_CODE,
@@ -53,64 +78,38 @@ def parse_bmk0200(df: pd.DataFrame) -> list[dict[str, Any]]:
                     currency=_CURRENCY,
                     source_id=_SOURCE_ID,
                     source_name=_SOURCE_NAME,
-                    source_url=f"{_BDS_BASE}/dataset/BMK0200",
+                    source_url=f"{_A2A_BASE}/export/EN/CSV/DATA/CUBE/BANKITALIA/DIFF/BMK0200",
                     observation_date=obs_date,
                     publication_date=obs_date,
-                    tenor_label=col,
-                    tenor_years=tenor_years,
-                    rate=float(rate_val),
+                    tenor_label=label,
+                    tenor_years=ty,
+                    rate=rate,
                     rate_unit="percent",
                     rate_type=_RATE_TYPE,
                     curve_family=_CURVE_FAMILY,
                     compounding="annual",
                     day_count="ACT/ACT",
-                    source_native_tenor=col,
-                    source_native_curve_name="BMK0200 Benchmark Yields",
+                    source_native_tenor=label,
+                    source_native_curve_name="BMK0200 Benchmark BTP Yields",
                     instrument_count_used=None,
                     fit_method=_FIT_METHOD,
                     is_interpolated=False,
                     is_extrapolated=False,
                     data_quality_flag="ok",
                     raw_file_hash="",
-                    ingestion_timestamp=pd.Timestamp.utcnow().isoformat(),
+                    ingestion_timestamp=ts,
                 )
             )
     return rows
 
 
-def validate_btp_curve(
-    borsa_rows: list[dict[str, Any]],
-    bdi_rows: list[dict[str, Any]],
-) -> pd.DataFrame:
-    borsa_df = pd.DataFrame(borsa_rows)
-    bdi_df = pd.DataFrame(bdi_rows)
-    results: list[dict[str, Any]] = []
-    for _, bdi_row in bdi_df.iterrows():
-        mask = (
-            (borsa_df["observation_date"] == bdi_row["observation_date"])
-            & (borsa_df["tenor_years"] == bdi_row["tenor_years"])
-            & (borsa_df["rate_type"] == "reconstructed_curve_yield")
-        )
-        match = borsa_df[mask]
-        if match.empty:
-            continue
-        borsa_rate = match.iloc[0]["rate"]
-        bdi_rate = bdi_row["rate"]
-        results.append(
-            {
-                "date": bdi_row["observation_date"],
-                "tenor": bdi_row["tenor_years"],
-                "reconstructed_rate": borsa_rate,
-                "official_benchmark_rate": bdi_rate,
-                "difference_bp": (borsa_rate - bdi_rate) * 100,
-            }
-        )
-    return pd.DataFrame(results)
+def fetch_bmk0200() -> list[dict[str, Any]]:
+    csv_text = _a2a_download("BMK0200")
+    return _parse_bmk0200_csv(csv_text)
 
 
 def fetch_all() -> list[dict[str, Any]]:
     try:
-        df = fetch_bmk0200()
-        return parse_bmk0200(df)
+        return fetch_bmk0200()
     except Exception:
         return []

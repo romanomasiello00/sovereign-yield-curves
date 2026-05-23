@@ -6,10 +6,11 @@ import numpy as np
 from scipy.interpolate import PchipInterpolator, interp1d
 from scipy.optimize import minimize
 
-from yieldcurves.config import standard_tenor_labels, standard_tenor_years
+from yieldcurves.config import standard_tenor_labels, standard_tenor_years, standard_tenors
 from yieldcurves.storage import build_row, ingestion_timestamp
 
 EPS = 1e-10
+TENOR_MATCH_EPS = 1e-6
 
 
 def clean_curve_points(
@@ -221,3 +222,132 @@ def reconstruct_country_curve(
             )
         )
     return rows
+
+
+def build_standard_grid(
+    native_rows: list[dict[str, Any]],
+    country_code: str,
+    country_name: str,
+    currency: str,
+    source_id: str,
+    source_name: str,
+    source_url: str,
+    rate_type: str,
+    curve_family: str,
+    compounding: str = "source_native",
+    day_count: str = "source_native",
+    raw_file_hash: str = "",
+) -> list[dict[str, Any]]:
+    """Generate standard-grid rows for standard tenors not present in native data.
+
+    For each observation_date in native_rows:
+      - Standard tenors with exact native matches are skipped (native row covers it).
+      - Standard tenors inside [min_native, max_native] with >=4 native points use PCHIP.
+      - Standard tenors below min_native get data_quality_flag = missing_short_end.
+      - Standard tenors above max_native get data_quality_flag = missing_long_end.
+      - Standard tenors inside range with <4 native points get data_quality_flag = sparse_curve.
+    No NSS fitting, no linear interpolation, no extrapolation.
+    """
+    std_list = standard_tenors()
+    ts = ingestion_timestamp()
+
+    by_date: dict[str, list[dict]] = {}
+    for r in native_rows:
+        d = r.get("observation_date", "")
+        if not d:
+            continue
+        by_date.setdefault(d, []).append(r)
+
+    results: list[dict[str, Any]] = []
+
+    for date_str in sorted(by_date.keys()):
+        date_rows = by_date[date_str]
+        native_points: list[tuple[float, float]] = []
+        native_tenor_set: set[float] = set()
+        for r in date_rows:
+            ty = r.get("tenor_years", 0.0)
+            rate = r.get("rate")
+            if rate is None or (isinstance(rate, float) and np.isnan(rate)):
+                continue
+            if ty <= 0:
+                continue
+            native_points.append((ty, float(rate)))
+            native_tenor_set.add(ty)
+
+        if not native_points:
+            continue
+
+        native_points.sort(key=lambda x: x[0])
+        min_t = native_points[0][0]
+        max_t = native_points[-1][0]
+        native_tenors_arr = np.array([p[0] for p in native_points])
+        native_rates_arr = np.array([p[1] for p in native_points])
+
+        for std in std_list:
+            std_ty = std["years"]
+            std_label = std["label"]
+
+            if any(abs(nt - std_ty) < TENOR_MATCH_EPS for nt in native_tenor_set):
+                continue
+
+            if std_ty < min_t - TENOR_MATCH_EPS:
+                data_quality = "missing_short_end"
+                rate_val = None
+                fit_method: str | None = None
+                is_interp = False
+            elif std_ty > max_t + TENOR_MATCH_EPS:
+                data_quality = "missing_long_end"
+                rate_val = None
+                fit_method = None
+                is_interp = False
+            elif len(native_points) >= 4:
+                try:
+                    pchip = PchipInterpolator(native_tenors_arr, native_rates_arr, extrapolate=False)
+                    rate_val = float(pchip(std_ty))
+                    if np.isnan(rate_val):
+                        raise ValueError
+                    data_quality = "ok"
+                    fit_method = "pchip_interpolation"
+                    is_interp = True
+                except (ValueError, RuntimeError):
+                    rate_val = None
+                    data_quality = "sparse_curve"
+                    fit_method = None
+                    is_interp = False
+            else:
+                rate_val = None
+                data_quality = "sparse_curve"
+                fit_method = None
+                is_interp = False
+
+            results.append(
+                build_row(
+                    country_code=country_code,
+                    country_name=country_name,
+                    currency=currency,
+                    source_id=source_id,
+                    source_name=source_name,
+                    source_url=source_url,
+                    observation_date=date_str,
+                    publication_date=date_str,
+                    tenor_label=std_label,
+                    tenor_years=std_ty,
+                    rate=rate_val,
+                    rate_unit="percent",
+                    rate_type=rate_type,
+                    curve_family=curve_family,
+                    compounding=compounding,
+                    day_count=day_count,
+                    source_native_tenor="",
+                    source_native_curve_name="",
+                    instrument_count_used=None,
+                    fit_method=fit_method,
+                    is_interpolated=is_interp,
+                    is_extrapolated=False,
+                    data_quality_flag=data_quality,
+                    raw_file_hash=raw_file_hash,
+                    ingestion_timestamp=ts,
+                )
+            )
+
+    return results

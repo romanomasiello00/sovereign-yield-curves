@@ -91,9 +91,125 @@ sources:
       backoff_factor: 2.0
 
   italy_bancaditalia:
-    enabled: false
+    enabled: true
     country_code: IT
     currency: EUR
     curve_family: "benchmark_government"
     rate_type: "benchmark_government_yield"
     fit_method: "direct_source"
+    schedule: "daily"
+    schedule_time: "18:30"
+    schedule_tz: "Europe/Rome"
+
+  singapore_mas:
+    enabled: true
+    country_code: SG
+    currency: SGD
+    source_id: "sg_mas_sgs_benchmark_yields"
+    source_name: "Monetary Authority of Singapore - SGS Benchmark Yields"
+    source_url: "https://eservices.mas.gov.sg/statistics/fdanet/BenchmarkPricesAndYields.aspx"
+    daily_page_url: "https://eservices.mas.gov.sg/statistics/fdanet/SgsBenchmarkIssuePrices.aspx"
+    schedule: "daily"
+    schedule_time: "18:00"
+    schedule_tz: "Asia/Singapore"
+    rate_type: "benchmark_government_yield"
+    curve_family: "benchmark_government"
+    compounding: "source_native"
+    day_count: "source_native"
+    fit_method: "direct_source"
+    fit_method_standard_grid: "pchip_interpolation"
+    source_native_tenors:
+      - "3M"
+      - "6M"
+      - "1Y"
+      - "2Y"
+      - "5Y"
+      - "7Y"
+      - "10Y"
+      - "15Y"
+      - "20Y"
+      - "30Y"
+      - "50Y"
+
+  sweden_riksbank:
+    enabled: true
+    country_code: SE
+    currency: SEK
+    source_id: "se_riksbank_market_rates"
+    source_name: "Sveriges Riksbank - Swedish market rates API"
+    source_url: "https://www.riksbank.se/en-gb/statistics/interest-rates-and-exchange-rates/retrieving-interest-rates-and-exchange-rates-via-api/"
+    api_base: "https://api.riksbank.se/swea/v1"
+    schedule: "daily"
+    schedule_time: "10:00"
+    schedule_tz: "Europe/Stockholm"
+    rate_type: "constant_maturity_yield"
+    curve_family: "benchmark_government"
+    compounding: "source_native"
+    day_count: "source_native"
+    fit_method: "direct_source"
+    fit_method_standard_grid: "pchip_interpolation"
+    source_native_series:
+      "1M":
+        group_id: 6
+        series_id: "SETB1MBENCHC"
+      "3M":
+        group_id: 6
+        series_id: "SETB3MBENCH"
+      "6M":
+        group_id: 6
+        series_id: "SETB6MBENCH"
+      "2Y":
+        group_id: 7
+        series_id: "SEGVB2YC"
+      "5Y":
+        group_id: 7
+        series_id: "SEGVB5YC"
+      "7Y":
+        group_id: 7
+        series_id: "SEGVB7YC"
+      "10Y":
+        group_id: 7
+        series_id: "SEGVB10YC"
+
+  norway_norgesbank:
+    enabled: true
+    country_code: "NO"
+    currency: NOK
+    source_id: "no_norgesbank_generic_yields"
+    source_name: "Norges Bank - Generic yields"
+    source_url: "https://www.norges-bank.no/en/topics/Statistics/norwegian-government-securities/generiske-statsrenter/"
+    schedule: "daily"
+    schedule_time: "10:00"
+    schedule_tz: "Europe/Oslo"
+    rate_type: "bond_ytm"
+    curve_family: "benchmark_government"
+    compounding: "source_native"
+    day_count: "source_native"
+    fit_method: "direct_source"
+    fit_method_standard_grid: "pchip_interpolation"
+    source_native_tenors:
+      - "3M"
+      - "6M"
+      - "12M"
+      - "3Y"
+      - "5Y"
+      - "7Y"
+      - "10Y"
+
+  australia_rba:
+    enabled: true
+    country_code: AU
+    currency: AUD
+    source_id: "au_rba_f17_zero_coupon_yields"
+    source_name: "Reserve Bank of Australia - F17 Zero-coupon Interest Rates"
+    source_url: "https://www.rba.gov.au/statistics/tables/"
+    raw_data_url: "https://www.rba.gov.au/statistics/tables/csv/f17-yields.csv"
+    schedule: "daily"
+    schedule_time: "11:30"
+    schedule_tz: "Australia/Sydney"
+    rate_type: "zero_spot"
+    curve_family: "nominal_government"
+    compounding: "source_native"
+    day_count: "source_native"
+    fit_method: "official"
+    fit_method_standard_grid: "pchip_interpolation"

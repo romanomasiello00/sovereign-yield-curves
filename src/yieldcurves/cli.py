@@ -9,6 +9,7 @@ import pandas as pd
 from yieldcurves import storage
 from yieldcurves.bds import pipeline as bds_pipeline
 from yieldcurves.config import source_config
+from yieldcurves.curves.reconstruct import build_standard_grid
 from yieldcurves.curves.tenors import standard_tenor_grid
 from yieldcurves.hashing import compute_data_hash
 
@@ -18,6 +19,10 @@ _SOURCES: dict[str, str] = {
     "DE": "yieldcurves.sources.germany_bundesbank",
     "NL": "yieldcurves.sources.netherlands_dsta",
     "IT": "yieldcurves.sources.italy_borsa",
+    "SG": "yieldcurves.sources.singapore_mas",
+    "SE": "yieldcurves.sources.sweden_riksbank",
+    "NO": "yieldcurves.sources.norway_norgesbank",
+    "AU": "yieldcurves.sources.australia_rba",
 }
 
 _COUNTRY_NAMES: dict[str, str] = {
@@ -26,6 +31,10 @@ _COUNTRY_NAMES: dict[str, str] = {
     "DE": "Germany",
     "NL": "Netherlands",
     "IT": "Italy",
+    "SG": "Singapore",
+    "SE": "Sweden",
+    "NO": "Norway",
+    "AU": "Australia",
 }
 
 
@@ -37,6 +46,25 @@ def _import_source(country: str):
         msg = f"Unknown country code: {country}"
         raise click.BadParameter(msg)
     return importlib.import_module(module_path)
+
+
+def _build_standard_grid_rows(rows: list[dict], country: str, cfg: dict) -> list[dict]:
+    if cfg.get("fit_method_standard_grid") == "pchip_interpolation":
+        standard_rows = build_standard_grid(
+            rows,
+            country_code=country,
+            country_name=_COUNTRY_NAMES.get(country, country),
+            currency=cfg.get("currency", ""),
+            source_id=f"{country.lower()}_{cfg.get('source_id', country.lower())}",
+            source_name=cfg.get("source_name", ""),
+            source_url=cfg.get("source_url", ""),
+            rate_type=cfg.get("rate_type", ""),
+            curve_family=cfg.get("curve_family", ""),
+            compounding=cfg.get("compounding", "source_native"),
+            day_count=cfg.get("day_count", "source_native"),
+        )
+        return rows + standard_rows
+    return rows
 
 
 def _validate_country(ctx, param, value):
@@ -66,8 +94,9 @@ def backfill(country: Optional[str], all_flag: bool):
             if not rows:
                 click.echo(f"  No data fetched for {c}")
                 continue
-            df = storage.normalize_rows(rows)
             cfg = source_config(c)
+            rows = _build_standard_grid_rows(rows, c, cfg)
+            df = storage.normalize_rows(rows)
             df["country_name"] = _COUNTRY_NAMES.get(c, c)
             df["source_id"] = f"{c.lower()}_{cfg.get('source_id', c.lower())}"
             storage.append_history(df)
@@ -103,8 +132,9 @@ def sync(country: Optional[str], all_flag: bool):
             if not new_rows:
                 click.echo(f"  No changes for {c}")
                 continue
-            df = storage.normalize_rows(new_rows)
             cfg = source_config(c)
+            new_rows = _build_standard_grid_rows(new_rows, c, cfg)
+            df = storage.normalize_rows(new_rows)
             df["country_name"] = _COUNTRY_NAMES.get(c, c)
             df["source_id"] = f"{c.lower()}_{cfg.get('source_id', c.lower())}"
             current_hash = compute_data_hash(df.to_csv(index=False).encode())

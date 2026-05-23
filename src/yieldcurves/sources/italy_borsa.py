@@ -13,6 +13,7 @@ from dateutil.parser import parse as parse_date
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from yieldcurves.config import source_config
+from yieldcurves.sources.italy_bancaditalia_bds import fetch_all as fetch_bdi
 from yieldcurves.storage import build_row
 
 _CFG = source_config("IT")
@@ -288,4 +289,9 @@ def fetch_current_snapshot() -> list[dict[str, Any]]:
 
 
 def fetch_all() -> list[dict[str, Any]]:
-    return fetch_current_snapshot()
+    borsa = fetch_current_snapshot()
+    try:
+        bdi = fetch_bdi()
+        return borsa + bdi
+    except Exception:
+        return borsa
