@@ -37,6 +37,15 @@ def standard_tenor_labels() -> list[str]:
     return [t["label"] for t in standard_tenors()]
 
 
+def source_config_by_name(name: str) -> dict[str, Any]:
+    sources = load_sources_config()["sources"]
+    cfg = sources.get(name)
+    if cfg is None:
+        msg = f"No source config found for source: {name}"
+        raise ValueError(msg)
+    return cfg
+
+
 def source_config(country_code: str) -> dict[str, Any]:
     sources = load_sources_config()["sources"]
     for key, cfg in sources.items():

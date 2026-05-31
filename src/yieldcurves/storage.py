@@ -166,6 +166,14 @@ def duckdb_path() -> Path:
     return processed_dir() / "yield_curves.duckdb"
 
 
+def load_latest(latest_path: Path | None = None) -> pd.DataFrame:
+    if latest_path is None:
+        latest_path = processed_dir() / "yield_curves_latest.parquet"
+    if latest_path.exists():
+        return pd.read_parquet(latest_path)
+    return _empty_dataframe()
+
+
 def open_duckdb() -> duckdb.DuckDBPyConnection:
     return duckdb.connect(str(duckdb_path()))
 
@@ -244,6 +252,44 @@ def sync_duckdb_after_write():
     sync_duckdb_from_parquet()
 
 
+def update_duckdb_latest(new_rows: pd.DataFrame):
+    if new_rows.empty:
+        return
+    con = open_duckdb()
+    key_cols = [
+        "country_code",
+        "source_id",
+        "observation_date",
+        "tenor_years",
+        "curve_family",
+        "rate_type",
+    ]
+    try:
+        if not _table_exists(con, "yield_curves_latest"):
+            sync_duckdb_from_parquet()
+            return
+        con.register("new_rows_df", new_rows)
+        key_match = " AND ".join(
+            f"existing.{col} = incoming.{col}" for col in key_cols
+        )
+        con.execute(
+            f"""
+            DELETE FROM yield_curves_latest AS existing
+            WHERE EXISTS (
+                SELECT 1 FROM new_rows_df AS incoming
+                WHERE {key_match}
+            )
+            """
+        )
+        con.execute("INSERT INTO yield_curves_latest SELECT * FROM new_rows_df")
+        con.execute(
+            "CREATE OR REPLACE VIEW yield_curves AS "
+            "SELECT * FROM yield_curves_latest"
+        )
+    finally:
+        con.close()
+
+
 def append_history(
     new_rows: pd.DataFrame,
     history_path: Path | None = None,
@@ -261,6 +307,20 @@ def append_history(
     return history_path
 
 
+def replace_country_history(
+    country_code: str,
+    new_rows: pd.DataFrame,
+    history_path: Path | None = None,
+) -> Path:
+    if history_path is None:
+        history_path = processed_dir() / "yield_curves_history.parquet"
+    existing = pd.read_parquet(history_path) if history_path.exists() else _empty_dataframe()
+    kept = existing[existing["country_code"] != country_code] if not existing.empty else existing
+    combined = pd.concat([kept, new_rows], ignore_index=True) if not new_rows.empty else kept
+    write_parquet(combined, history_path)
+    return history_path
+
+
 def update_latest(
     new_rows: pd.DataFrame,
     latest_path: Path | None = None,
@@ -269,7 +329,7 @@ def update_latest(
         latest_path = processed_dir() / "yield_curves_latest.parquet"
     if new_rows.empty:
         return latest_path
-    existing = pd.read_parquet(latest_path) if latest_path.exists() else _empty_dataframe()
+    existing = load_latest(latest_path)
     key_cols = [
         "country_code",
         "source_id",
@@ -284,10 +344,27 @@ def update_latest(
     return latest_path
 
 
+def replace_country_latest(
+    country_code: str,
+    new_rows: pd.DataFrame,
+    latest_path: Path | None = None,
+) -> Path:
+    if latest_path is None:
+        latest_path = processed_dir() / "yield_curves_latest.parquet"
+    existing = pd.read_parquet(latest_path) if latest_path.exists() else _empty_dataframe()
+    kept = existing[existing["country_code"] != country_code] if not existing.empty else existing
+    combined = pd.concat([kept, new_rows], ignore_index=True) if not new_rows.empty else kept
+    write_parquet(combined, latest_path)
+    return latest_path
+
+
 def load_source_registry() -> pd.DataFrame:
     path = metadata_dir() / "source_registry.parquet"
     if path.exists():
-        return pd.read_parquet(path)
+        try:
+            return pd.read_parquet(path)
+        except Exception:
+            return pd.DataFrame(columns=["source_id", "last_observation_date", "last_raw_file_hash"])
     return pd.DataFrame(columns=["source_id", "last_observation_date", "last_raw_file_hash"])
 
 
@@ -299,7 +376,12 @@ def save_source_registry(df: pd.DataFrame):
 def load_ingestion_log() -> pd.DataFrame:
     path = metadata_dir() / "ingestion_log.parquet"
     if path.exists():
-        return pd.read_parquet(path)
+        try:
+            return pd.read_parquet(path)
+        except Exception:
+            return pd.DataFrame(
+                columns=["source_id", "ingestion_timestamp", "status", "rows_added", "raw_file_hash"]
+            )
     return pd.DataFrame(
         columns=["source_id", "ingestion_timestamp", "status", "rows_added", "raw_file_hash"]
     )
@@ -309,9 +391,6 @@ def append_ingestion_log(entry: dict[str, Any]):
     path = metadata_dir() / "ingestion_log.parquet"
     entry["ingestion_timestamp"] = entry.get("ingestion_timestamp", ingestion_timestamp())
     new = pd.DataFrame([entry])
-    if path.exists():
-        existing = pd.read_parquet(path)
-        combined = pd.concat([existing, new], ignore_index=True)
-    else:
-        combined = new
+    existing = load_ingestion_log()
+    combined = pd.concat([existing, new], ignore_index=True)
     write_parquet(combined, path)

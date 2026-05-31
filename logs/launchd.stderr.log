@@ -1,0 +1,6 @@
+shell-init: error retrieving current directory: getcwd: cannot access parent directories: Operation not permitted
+/bin/bash: /Users/romanomasiello/Desktop/prova/yield_curves_data/sovereign_yield_curve_ingestion/scripts/run_sync.sh: Operation not permitted
+  Error syncing IT: No module named 'yieldcurves.sources.italy_borsa'
+  Error syncing JP: Could not open Parquet input source '<Buffer>': Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file.
+  Error syncing GB: Could not open Parquet input source '<Buffer>': Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file.
+  Error syncing DE: Could not open Parquet input source '<Buffer>': Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file.

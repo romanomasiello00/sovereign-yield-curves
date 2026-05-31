@@ -4,6 +4,7 @@ from yieldcurves.sources.italy_borsa import (
     _compute_maturity_years,
     _is_valid_btp,
     _normalise_date,
+    _observation_date,
     _safe_float,
 )
 
@@ -16,6 +17,8 @@ def test_safe_float():
 
 def test_normalise_date():
     assert _normalise_date("2024-01-15") == "2024-01-15"
+    assert _normalise_date("2026/05/21") == "2026-05-21"
+    assert _normalise_date("26/05/21") == "2026-05-21"
     assert _normalise_date("") is None
     assert _normalise_date(None) is None
 
@@ -50,3 +53,20 @@ def test_compute_maturity_years():
 
     my2 = _compute_maturity_years("2020-01-01", "2024-01-15")
     assert my2 is None
+
+
+def test_observation_date_prefers_source_dates():
+    assert _observation_date(
+        {
+            "official_close_date": "2026-05-21",
+            "reference_price_date": "2026-05-22",
+        },
+        fallback="2026-05-23",
+    ) == "2026-05-21"
+
+    assert _observation_date(
+        {"reference_price_date": "2026-05-22"},
+        fallback="2026-05-23",
+    ) == "2026-05-22"
+
+    assert _observation_date({}, fallback="2026-05-23") == "2026-05-23"

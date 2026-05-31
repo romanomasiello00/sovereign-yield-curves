@@ -5,8 +5,11 @@ from pathlib import Path
 from yieldcurves.storage import (
     append_history,
     build_row,
+    load_latest,
     normalize_rows,
     output_schema,
+    replace_country_history,
+    replace_country_latest,
     update_latest,
 )
 
@@ -88,3 +91,36 @@ def test_update_latest(tmp_path: Path):
     result2 = update_latest(df2, latest_path)
     df_combined = __import__("pandas").read_parquet(result2)
     assert len(df_combined) == 2
+
+
+def test_load_latest_returns_empty_schema_when_missing(tmp_path: Path):
+    df = load_latest(tmp_path / "missing.parquet")
+
+    assert len(df) == 0
+    assert list(df.columns) == list(output_schema())
+
+
+def test_replace_country_history_and_latest(tmp_path: Path):
+    jp = normalize_rows([build_row(**_ROW_KW)])
+    it = normalize_rows([build_row(**{**_ROW_KW, "country_code": "IT", "rate": 2.5})])
+    history_path = tmp_path / "history.parquet"
+    latest_path = tmp_path / "latest.parquet"
+
+    append_history(jp, history_path)
+    append_history(it, history_path)
+    update_latest(jp, latest_path)
+    update_latest(it, latest_path)
+
+    it_new = normalize_rows(
+        [build_row(**{**_ROW_KW, "country_code": "IT", "observation_date": "2024-01-16", "rate": 3.0})]
+    )
+    replace_country_history("IT", it_new, history_path)
+    replace_country_latest("IT", it_new, latest_path)
+
+    history_df = __import__("pandas").read_parquet(history_path)
+    latest_df = __import__("pandas").read_parquet(latest_path)
+
+    assert sorted(history_df["country_code"].tolist()) == ["IT", "JP"]
+    assert sorted(latest_df["country_code"].tolist()) == ["IT", "JP"]
+    assert history_df[history_df["country_code"] == "IT"]["observation_date"].tolist() == ["2024-01-16"]
+    assert latest_df[latest_df["country_code"] == "IT"]["observation_date"].tolist() == ["2024-01-16"]

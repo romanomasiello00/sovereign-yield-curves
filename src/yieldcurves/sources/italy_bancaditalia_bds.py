@@ -6,10 +6,10 @@ from typing import Any
 
 import requests
 
-from yieldcurves.config import source_config
+from yieldcurves.config import source_config_by_name
 from yieldcurves.storage import build_row, ingestion_timestamp
 
-_CFG = source_config("IT")
+_CFG = source_config_by_name("italy_bancaditalia")
 _COUNTRY_CODE = "IT"
 _CURRENCY = "EUR"
 _SOURCE_ID = "italy_bancaditalia"

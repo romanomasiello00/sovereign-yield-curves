@@ -178,6 +178,7 @@ sources:
     source_id: "no_norgesbank_generic_yields"
     source_name: "Norges Bank - Generic yields"
     source_url: "https://www.norges-bank.no/en/topics/Statistics/norwegian-government-securities/generiske-statsrenter/"
+    sdmx_url: "https://data.norges-bank.no/api/data/GOVT_GENERIC_RATES"
     schedule: "daily"
     schedule_time: "10:00"
     schedule_tz: "Europe/Oslo"
@@ -190,7 +191,7 @@ sources:
     source_native_tenors:
       - "3M"
       - "6M"
-      - "12M"
+      - "1Y"
       - "3Y"
       - "5Y"
       - "7Y"

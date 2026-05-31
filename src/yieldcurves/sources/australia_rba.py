@@ -45,6 +45,31 @@ _HEADER_TENOR_MAP: dict[str, str] = {
     "15Y": "15Y",
 }
 
+# Maps fractional-year labels from "Zero-coupon yield – X yrs/yr" headers to standard tenors.
+_FRAC_YEAR_TO_TENOR: dict[float, str] = {
+    0.25: "3M",
+    0.5: "6M",
+    1.0: "1Y",
+    2.0: "2Y",
+    3.0: "3Y",
+    5.0: "5Y",
+    7.0: "7Y",
+    10.0: "10Y",
+    15.0: "15Y",
+}
+
+
+def _tenor_from_rba_header(text: str) -> str | None:
+    """Extract standard tenor label from RBA F17 column header like 'Zero-coupon yield – 1 yr'."""
+    import re
+    # Match patterns like "1 yr", "0.25 yrs", "10 yrs"
+    m = re.search(r"([\d.]+)\s*yr", text, re.IGNORECASE)
+    if m:
+        years = float(m.group(1))
+        return _FRAC_YEAR_TO_TENOR.get(years)
+    upper = text.strip().upper()
+    return _HEADER_TENOR_MAP.get(upper)
+
 
 def _normalise_date(val: Any) -> str | None:
     if pd.isna(val):
@@ -59,7 +84,12 @@ def _normalise_date(val: Any) -> str | None:
 
 
 def _find_header_row(lines: list[str]) -> tuple[int, list[str], dict[int, str]]:
-    date_col = 0
+    """Find data header row and map column indices to standard tenor labels.
+
+    Handles two RBA F17 formats:
+    - Old: header row starts with "Date"/"OBSERVATION_DATE", columns like "3 MONTHS"
+    - New: header row starts with "Title", columns like "Zero-coupon yield – 1 yr"
+    """
     col_map: dict[int, str] = {}
     for i, line in enumerate(lines):
         if not line.strip():
@@ -75,7 +105,24 @@ def _find_header_row(lines: list[str]) -> tuple[int, list[str], dict[int, str]]:
                     col_map[j] = _HEADER_TENOR_MAP[upper]
             if col_map:
                 return i, parts, col_map
+        elif first == "TITLE":
+            # New RBA format: "Title,Zero-coupon yield – 0 yrs,Zero-coupon yield – 0.25 yrs,..."
+            for j, p in enumerate(parts[1:], 1):
+                tenor = _tenor_from_rba_header(p)
+                if tenor is not None:
+                    col_map[j] = tenor
+            if col_map:
+                return i, parts, col_map
     return -1, [], {}
+
+
+_SKIP_PREFIXES = frozenset(
+    p.upper()
+    for p in (
+        "TITLE", "DESCRIPTION", "FREQUENCY", "TYPE", "UNITS", "SOURCE",
+        "PUBLICATION DATE", "SERIES ID", "SERIES_ID", "UNIQUE IDENTIFIER",
+    )
+)
 
 
 def _parse_csv(data: bytes, source_url: str) -> list[dict[str, Any]]:
@@ -94,6 +141,11 @@ def _parse_csv(data: bytes, source_url: str) -> list[dict[str, Any]]:
         if not line.strip():
             continue
         parts = [p.strip().strip('"') for p in line.split(",")]
+        if not parts:
+            continue
+        # Skip metadata rows (Series ID, Publication date, etc.)
+        if parts[0].upper().strip() in _SKIP_PREFIXES:
+            continue
         if len(parts) <= max(col_map.keys()):
             continue
         date_str = _normalise_date(parts[0])

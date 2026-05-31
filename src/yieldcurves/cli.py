@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 import click
+import numpy as np
 import pandas as pd
 
 from yieldcurves import storage
@@ -18,7 +19,7 @@ _SOURCES: dict[str, str] = {
     "GB": "yieldcurves.sources.uk_boe",
     "DE": "yieldcurves.sources.germany_bundesbank",
     "NL": "yieldcurves.sources.netherlands_dsta",
-    "IT": "yieldcurves.sources.italy_borsa",
+    "IT": "yieldcurves.sources.italy_bancaditalia_bds",
     "SG": "yieldcurves.sources.singapore_mas",
     "SE": "yieldcurves.sources.sweden_riksbank",
     "NO": "yieldcurves.sources.norway_norgesbank",
@@ -67,6 +68,83 @@ def _build_standard_grid_rows(rows: list[dict], country: str, cfg: dict) -> list
     return rows
 
 
+def _default_source_id(country: str, cfg: dict) -> str:
+    return f"{country.lower()}_{cfg.get('source_id', country.lower())}"
+
+
+def _preserve_row_source_ids(df: pd.DataFrame, fallback_source_id: str) -> pd.DataFrame:
+    df = df.copy()
+    if "source_id" not in df.columns:
+        df["source_id"] = fallback_source_id
+        return df
+    source_ids = df["source_id"].replace({"": None, "nan": None, "None": None})
+    df["source_id"] = source_ids.fillna(fallback_source_id)
+    return df
+
+
+def _stable_frame_hash(df: pd.DataFrame) -> str:
+    stable = df.copy()
+    for col in ("ingestion_timestamp", "revision_id"):
+        if col in stable.columns:
+            stable = stable.drop(columns=col)
+    stable = stable.replace({np.nan: None})
+    sort_cols = [c for c in stable.columns if c in ("country_code", "source_id", "observation_date", "tenor_years", "curve_family", "rate_type")]
+    if sort_cols:
+        stable = stable.sort_values(sort_cols).reset_index(drop=True)
+    return compute_data_hash(stable.to_csv(index=False).encode())
+
+
+def _save_registry_snapshot(country: str, df: pd.DataFrame, current_hash: str) -> None:
+    registry = storage.load_source_registry()
+    max_date = df["observation_date"].max() if not df.empty else ""
+    new_registry = pd.DataFrame(
+        [{
+            "source_id": country,
+            "last_observation_date": max_date,
+            "last_raw_file_hash": current_hash,
+        }]
+    )
+    if not registry[registry["source_id"] == country].empty:
+        registry.loc[registry["source_id"] == country, "last_raw_file_hash"] = current_hash
+        registry.loc[registry["source_id"] == country, "last_observation_date"] = max_date
+        storage.save_source_registry(registry)
+    else:
+        combined = pd.concat([registry, new_registry], ignore_index=True)
+        storage.save_source_registry(combined)
+
+
+def _latest_observation_cutoffs(existing: pd.DataFrame) -> dict[tuple[str, str, str, str], str]:
+    if existing.empty:
+        return {}
+    key_cols = ["country_code", "source_id", "curve_family", "rate_type"]
+    required = key_cols + ["observation_date"]
+    if any(col not in existing.columns for col in required):
+        return {}
+    grouped = existing.dropna(subset=["observation_date"]).groupby(key_cols, dropna=False)["observation_date"].max()
+    return {tuple(str(part) for part in key): str(value) for key, value in grouped.items()}
+
+
+def _filter_new_observations(df: pd.DataFrame, existing_latest: pd.DataFrame) -> pd.DataFrame:
+    """Keep only observations newer than the stored latest date for the same source stream."""
+    if df.empty or existing_latest.empty:
+        return df
+    cutoffs = _latest_observation_cutoffs(existing_latest)
+    if not cutoffs:
+        return df
+
+    def is_new(row: pd.Series) -> bool:
+        key = (
+            str(row["country_code"]),
+            str(row["source_id"]),
+            str(row["curve_family"]),
+            str(row["rate_type"]),
+        )
+        cutoff = cutoffs.get(key)
+        return cutoff is None or str(row["observation_date"]) > cutoff
+
+    return df[df.apply(is_new, axis=1)].copy()
+
+
 def _validate_country(ctx, param, value):
     if value is not None and value.upper() not in _SOURCES:
         available = ", ".join(sorted(_SOURCES))
@@ -83,7 +161,12 @@ def cli():
 @click.option("--country", "-c", default=None, callback=_validate_country,
               help="Country code (JP, GB, DE, NL, IT)")
 @click.option("--all", "all_flag", is_flag=True, help="Backfill all countries")
-def backfill(country: Optional[str], all_flag: bool):
+@click.option(
+    "--replace-existing",
+    is_flag=True,
+    help="Replace existing rows for the selected country in latest/history instead of appending",
+)
+def backfill(country: Optional[str], all_flag: bool, replace_existing: bool):
     """Backfill historical yield curve data for a country."""
     countries = list(_SOURCES) if all_flag or country is None else [country]
     for c in countries:
@@ -98,16 +181,22 @@ def backfill(country: Optional[str], all_flag: bool):
             rows = _build_standard_grid_rows(rows, c, cfg)
             df = storage.normalize_rows(rows)
             df["country_name"] = _COUNTRY_NAMES.get(c, c)
-            df["source_id"] = f"{c.lower()}_{cfg.get('source_id', c.lower())}"
-            storage.append_history(df)
-            storage.update_latest(df)
+            df = _preserve_row_source_ids(df, _default_source_id(c, cfg))
+            current_hash = _stable_frame_hash(df)
+            if replace_existing:
+                storage.replace_country_history(c, df)
+                storage.replace_country_latest(c, df)
+            else:
+                storage.append_history(df)
+                storage.update_latest(df)
             storage.sync_duckdb_after_write()
+            _save_registry_snapshot(c, df, current_hash)
             storage.append_ingestion_log(
                 {
                     "source_id": c,
-                    "status": "success",
+                    "status": "replaced" if replace_existing else "success",
                     "rows_added": len(df),
-                    "raw_file_hash": "",
+                    "raw_file_hash": current_hash,
                 }
             )
             click.echo(f"  Added {len(df)} rows for {c}")
@@ -121,14 +210,24 @@ def backfill(country: Optional[str], all_flag: bool):
 def sync(country: Optional[str], all_flag: bool):
     """Incremental sync of yield curve data."""
     countries = list(_SOURCES) if all_flag else [country] if country else list(_SOURCES)
+    existing_latest = storage.load_latest()
     for c in countries:
         click.echo(f"Syncing {_COUNTRY_NAMES.get(c, c)}...")
         try:
             registry = storage.load_source_registry()
             last_row = registry[registry["source_id"] == c]
             last_hash = last_row["last_raw_file_hash"].iloc[0] if not last_row.empty else ""
+            last_obs_date = (
+                last_row["last_observation_date"].iloc[0]
+                if not last_row.empty and "last_observation_date" in last_row.columns
+                else None
+            )
             mod = _import_source(c)
-            new_rows = mod.fetch_all()
+            import inspect
+            fetch_kwargs: dict = {}
+            if last_obs_date and "from_date" in inspect.signature(mod.fetch_all).parameters:
+                fetch_kwargs["from_date"] = str(last_obs_date)
+            new_rows = mod.fetch_all(**fetch_kwargs)
             if not new_rows:
                 click.echo(f"  No changes for {c}")
                 continue
@@ -136,8 +235,9 @@ def sync(country: Optional[str], all_flag: bool):
             new_rows = _build_standard_grid_rows(new_rows, c, cfg)
             df = storage.normalize_rows(new_rows)
             df["country_name"] = _COUNTRY_NAMES.get(c, c)
-            df["source_id"] = f"{c.lower()}_{cfg.get('source_id', c.lower())}"
-            current_hash = compute_data_hash(df.to_csv(index=False).encode())
+            df = _preserve_row_source_ids(df, _default_source_id(c, cfg))
+            current_hash = _stable_frame_hash(df)
+            fetched_df = df
             if current_hash == last_hash:
                 click.echo(f"  No changes for {c} (hash unchanged)")
                 storage.append_ingestion_log(
@@ -149,24 +249,23 @@ def sync(country: Optional[str], all_flag: bool):
                     }
                 )
                 continue
-            storage.append_history(df)
+            df = _filter_new_observations(df, existing_latest)
+            if df.empty:
+                click.echo(f"  No new observations for {c}")
+                _save_registry_snapshot(c, fetched_df, current_hash)
+                storage.append_ingestion_log(
+                    {
+                        "source_id": c,
+                        "status": "no_new_observations",
+                        "rows_added": 0,
+                        "raw_file_hash": current_hash,
+                    }
+                )
+                continue
             storage.update_latest(df)
-            storage.sync_duckdb_after_write()
-            new_registry = pd.DataFrame(
-                [{
-                    "source_id": c,
-                    "last_observation_date": df["observation_date"].max(),
-                    "last_raw_file_hash": current_hash,
-                }]
-            )
-            if not registry[registry["source_id"] == c].empty:
-                registry.loc[registry["source_id"] == c, "last_raw_file_hash"] = current_hash
-                max_date = df["observation_date"].max()
-                registry.loc[registry["source_id"] == c, "last_observation_date"] = max_date
-                storage.save_source_registry(registry)
-            else:
-                combined = pd.concat([registry, new_registry], ignore_index=True)
-                storage.save_source_registry(combined)
+            storage.update_duckdb_latest(df)
+            _save_registry_snapshot(c, fetched_df, current_hash)
+            existing_latest = storage.load_latest()
             storage.append_ingestion_log(
                 {
                     "source_id": c,
@@ -196,13 +295,13 @@ def validate(country: Optional[str]):
             latest_path = storage.processed_dir() / "yield_curves_latest.parquet"
             if latest_path.exists():
                 latest = pd.read_parquet(latest_path)
-            borsa_rows = latest[latest["country_code"] == "IT"].to_dict("records")
+            italy_rows = latest[latest["country_code"] == "IT"].to_dict("records")
             bdi_rows = fetch_bmk0200()
             if not bdi_rows.empty:
                 from yieldcurves.sources.italy_bancaditalia_bds import parse_bmk0200
 
                 bdi_parsed = parse_bmk0200(bdi_rows)
-                report = validate_btp_curve(borsa_rows, bdi_parsed)
+                report = validate_btp_curve(italy_rows, bdi_parsed)
                 if not report.empty:
                     click.echo(f"  Validation report: {len(report)} matching observations")
                     click.echo(f"  Mean difference (bp): {report['difference_bp'].mean():.2f}")

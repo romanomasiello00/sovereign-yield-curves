@@ -12,11 +12,11 @@ from bs4 import BeautifulSoup
 from dateutil.parser import parse as parse_date
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from yieldcurves.config import source_config
+from yieldcurves.config import source_config_by_name
 from yieldcurves.sources.italy_bancaditalia_bds import fetch_all as fetch_bdi
 from yieldcurves.storage import build_row
 
-_CFG = source_config("IT")
+_CFG = source_config_by_name("italy_borsa")
 _COUNTRY_CODE = "IT"
 _CURRENCY = "EUR"
 _SOURCE_ID = "italy_borsa"
@@ -41,6 +41,7 @@ class BTPBond:
     modified_duration: float | None
     reference_price: float | None
     reference_price_date: str | None
+    official_close_date: str | None
     issuer: str | None
     bond_structure: str | None
     outstanding_amount: float | None
@@ -59,6 +60,7 @@ class BTPBond:
         self.modified_duration = None
         self.reference_price = None
         self.reference_price_date = None
+        self.official_close_date = None
         self.issuer = None
         self.bond_structure = None
         self.outstanding_amount = None
@@ -72,8 +74,16 @@ def _normalise_date(val: Any) -> str | None:
         return None
     if isinstance(val, datetime):
         return val.strftime("%Y-%m-%d")
+    text = str(val).strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%y/%m/%d", "%d/%m/%y"):
+        try:
+            return datetime.strptime(text, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
     try:
-        return parse_date(str(val)).strftime("%Y-%m-%d")
+        return parse_date(text, dayfirst=True).strftime("%Y-%m-%d")
     except (ValueError, TypeError):
         return None
 
@@ -167,6 +177,8 @@ def _scrape_detail_page(isin: str) -> dict[str, Any]:
                 detail["expiry_date"] = _normalise_date(value)
             elif "reference price date" in label:
                 detail["reference_price_date"] = _normalise_date(value)
+            elif "official close date" in label:
+                detail["official_close_date"] = _normalise_date(value)
     return detail
 
 
@@ -211,6 +223,15 @@ def _compute_maturity_years(expiry_date_str: str, observation_date_str: str) -> 
         return None
 
 
+def _observation_date(detail: dict[str, Any], fallback: str | None = None) -> str:
+    return (
+        detail.get("official_close_date")
+        or detail.get("reference_price_date")
+        or fallback
+        or datetime.now().strftime("%Y-%m-%d")
+    )
+
+
 def fetch_current_snapshot() -> list[dict[str, Any]]:
     all_bonds: list[dict[str, Any]] = []
     page = 1
@@ -243,6 +264,7 @@ def fetch_current_snapshot() -> list[dict[str, Any]]:
         b.modified_duration = detail.get("modified_duration")
         b.reference_price = detail.get("reference_price")
         b.reference_price_date = detail.get("reference_price_date")
+        b.official_close_date = detail.get("official_close_date")
         b.issuer = detail.get("issuer")
         b.bond_structure = detail.get("bond_structure")
         b.outstanding_amount = detail.get("outstanding_amount")
@@ -250,9 +272,14 @@ def fetch_current_snapshot() -> list[dict[str, Any]]:
         b.day_count = detail.get("day_count")
         b.annual_coupon_rate = detail.get("annual_coupon_rate")
         detail_bonds.append(b)
-    obs_date = datetime.now().strftime("%Y-%m-%d")
     rows: list[dict[str, Any]] = []
     for b in detail_bonds:
+        obs_date = _observation_date(
+            {
+                "official_close_date": getattr(b, "official_close_date", None),
+                "reference_price_date": b.reference_price_date,
+            }
+        )
         my = _compute_maturity_years(str(b.expiry_date), obs_date)
         if my is None or my <= 0:
             continue

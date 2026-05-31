@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from typing import Any
 
@@ -104,24 +105,32 @@ def _parse_riksbank_json(data: dict, series_id: str, source_url: str) -> list[di
     return rows
 
 
-def _fetch_series(group_id: int, series_id: str) -> tuple[bytes, str]:
-    url = f"{_API_BASE}/Observations/group/{group_id}/series/{series_id}"
+@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=2, min=4, max=30))
+def _fetch_series(series_id: str, from_date: str = "1990-01-01", to_date: str | None = None) -> tuple[bytes, str]:
+    if to_date is None:
+        to_date = datetime.now().strftime("%Y-%m-%d")
+    url = f"{_API_BASE}/Observations/{series_id}/{from_date}/{to_date}"
     resp = requests.get(url, timeout=60)
     resp.raise_for_status()
     raw = resp.content
     return raw, url
 
 
-def fetch_all() -> list[dict[str, Any]]:
+def fetch_all(from_date: str = "1990-01-01") -> list[dict[str, Any]]:
+    """Fetch all series from the Riksbank API.
+
+    Pass from_date for incremental syncs to avoid re-fetching full history.
+    """
     rows: list[dict[str, Any]] = []
     series_map: dict[str, dict] = _CFG.get("source_native_series", {})
     for label_info in series_map.values():
         try:
-            raw_data, url = _fetch_series(label_info["group_id"], label_info["series_id"])
-            save_raw(raw_data, f"riksbank_{label_info['series_id']}.json")
             import json
+            raw_data, url = _fetch_series(label_info["series_id"], from_date=from_date)
+            save_raw(raw_data, f"riksbank_{label_info['series_id']}.json")
             data = json.loads(raw_data)
             rows.extend(_parse_riksbank_json(data, label_info["series_id"], url))
+            time.sleep(1)
         except Exception:
             continue
 
