@@ -107,6 +107,15 @@ jobs:
             git push
           fi
 
+      - name: Notify macro_database (refresh webapp)
+        if: success()
+        run: |
+          curl -sf -X POST \
+            -H "Authorization: token ${{ secrets.MACRO_DB_DISPATCH_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/romanomasiello00/macro_database/dispatches \
+            -d '{"event_type":"provider-updated","client_payload":{"provider":"yieldcurves"}}'
+
       - name: Upload artifacts (on failure)
         if: failure()
         uses: actions/upload-artifact@v4
