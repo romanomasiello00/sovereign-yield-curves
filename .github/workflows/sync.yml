@@ -99,7 +99,7 @@ jobs:
         run: |
           git config user.name "yield-curve-bot"
           git config user.email "yield-curve-bot@users.noreply.github.com"
-          git add data/ metadata/
+          git add data/
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else

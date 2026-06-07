@@ -149,7 +149,10 @@ def compute_frequency_score(freq_code: str, config: dict) -> float:
 
 def compute_importance_score(series_name: str, config: dict) -> float:
     categories = config.get("scoring", {}).get("category_keywords", {})
-    name_lower = series_name.lower()
+    if series_name is None or (isinstance(series_name, float) and pd.isna(series_name)):
+        name_lower = ""
+    else:
+        name_lower = str(series_name).lower()
 
     for cat_key in ("high", "medium", "low"):
         cat = categories.get(cat_key)
