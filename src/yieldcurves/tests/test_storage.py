@@ -100,6 +100,18 @@ def test_load_latest_returns_empty_schema_when_missing(tmp_path: Path):
     assert list(df.columns) == list(output_schema())
 
 
+def test_load_latest_quarantines_corrupt_parquet(tmp_path: Path):
+    latest_path = tmp_path / "latest.parquet"
+    latest_path.write_bytes(b"not parquet")
+
+    df = load_latest(latest_path)
+
+    assert len(df) == 0
+    assert list(df.columns) == list(output_schema())
+    assert not latest_path.exists()
+    assert list(tmp_path.glob("latest.corrupt.*.parquet"))
+
+
 def test_replace_country_history_and_latest(tmp_path: Path):
     jp = normalize_rows([build_row(**_ROW_KW)])
     it = normalize_rows([build_row(**{**_ROW_KW, "country_code": "IT", "rate": 2.5})])
