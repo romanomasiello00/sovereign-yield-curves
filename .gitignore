@@ -18,6 +18,11 @@ data/raw/*.ods
 *.duckdb.wal
 *.tmp
 
+# Processed intermediates and crash backups (regenerated during sync)
+data/processed/yield_curves_history.parquet
+data/processed/*.bak
+data/processed/*.corrupt.*.parquet
+
 # BDS raw downloads (large, regenerated from A2A API)
 data/bds/raw/
 !data/bds/raw/.gitkeep
