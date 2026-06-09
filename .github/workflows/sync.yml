@@ -72,6 +72,16 @@ jobs:
         id: target
         run: |
           INPUT="${{ github.event.inputs.target }}"
+          SCHEDULE="${{ github.event.schedule }}"
+          if [[ -n "$SCHEDULE" ]]; then
+            case "$SCHEDULE" in
+              "0 8 10 * *"|"0 8 15 2,5,8,11 *"|"0 8 30 4 *"|"0 8 30 4,10 *")
+                echo "flag=" >> $GITHUB_OUTPUT
+                echo "bds_flag=--workers 4" >> $GITHUB_OUTPUT
+                exit 0
+                ;;
+            esac
+          fi
           if [[ -z "$INPUT" || "$INPUT" == "ALL" ]]; then
             echo "flag=--all" >> $GITHUB_OUTPUT
             echo "bds_flag=" >> $GITHUB_OUTPUT
@@ -122,9 +132,9 @@ jobs:
             -d '{"event_type":"provider-updated","client_payload":{"provider":"yieldcurves","source_repo":"romanomasiello00/sovereign-yield-curves","source_run_id":"${{ github.run_id }}","artifact_name":"yield-curves-latest"}}'
 
       - name: Sync BDS data
-        if: steps.target.outputs.bds_flag != '' || steps.target.outputs.flag == '--all'
+        if: steps.target.outputs.bds_flag != ''
         run: |
-          yieldcurves bds sync -w 4
+          yieldcurves bds sync ${{ steps.target.outputs.bds_flag }}
 
       - name: Validate outputs
         run: |
