@@ -24,6 +24,8 @@ _SOURCES: dict[str, str] = {
     "SE": "yieldcurves.sources.sweden_riksbank",
     "NO": "yieldcurves.sources.norway_norgesbank",
     "AU": "yieldcurves.sources.australia_rba",
+    "CA": "yieldcurves.sources.canada_bankofcanada",
+    "CH": "yieldcurves.sources.switzerland_snb",
 }
 
 _COUNTRY_NAMES: dict[str, str] = {
@@ -36,6 +38,8 @@ _COUNTRY_NAMES: dict[str, str] = {
     "SE": "Sweden",
     "NO": "Norway",
     "AU": "Australia",
+    "CA": "Canada",
+    "CH": "Switzerland",
 }
 
 

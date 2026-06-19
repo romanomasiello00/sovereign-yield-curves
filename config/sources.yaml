@@ -62,8 +62,10 @@ sources:
     enabled: true
     country_code: NL
     currency: EUR
+    landing_url: "https://english.dsta.nl/latest/statistical-information/yields-on-dsls"
+    site_base: "https://english.dsta.nl"
     urls:
-      from_2010: "https://english.dsta.nl/site/binaries/site-content/collections/documents/2026/04/30/yields-on-dsls-from-2010-onwards/mts-fixings-publicatie.ods"
+      from_2010: "https://english.dsta.nl/site/binaries/site-content/collections/documents/2026/06/02/yields-on-dsls-from-2010-onwards/mts-fixings-publicatie.ods"
       from_2002_to_2009: "https://english.dsta.nl/site/binaries/site-content/collections/documents/2010/09/01/yields-on-dsls-from-2002-to-2009/mts-fixings-van-2002-tot-en-met-2009.xlsx"
     schedule: "monthly"
     revision_window_days: 10
@@ -196,6 +198,56 @@ sources:
       - "5Y"
       - "7Y"
       - "10Y"
+
+  canada_bankofcanada:
+    enabled: true
+    country_code: CA
+    currency: CAD
+    source_id: "ca_boc_benchmark_bond_yields"
+    source_name: "Bank of Canada - Selected benchmark bond yields"
+    source_url: "https://www.bankofcanada.ca/valet/groups/bond_yields_benchmark"
+    api_url: "https://www.bankofcanada.ca/valet"
+    schedule: "daily"
+    schedule_time: "16:30"
+    schedule_tz: "America/Toronto"
+    rate_type: "bond_ytm"
+    curve_family: "benchmark_government"
+    compounding: "source_native"
+    day_count: "source_native"
+    fit_method: "direct_source"
+    source_native_tenors:
+      - "2Y"
+      - "3Y"
+      - "5Y"
+      - "7Y"
+      - "10Y"
+      - "30Y"
+
+  switzerland_snb:
+    enabled: true
+    country_code: CH
+    currency: CHF
+    source_id: "ch_snb_confederation_spot_rates"
+    source_name: "Swiss National Bank - Confederation bond spot interest rates"
+    source_url: "https://data.snb.ch/en/topics/financial-markets#!/cube/rendoblim"
+    api_url: "https://data.snb.ch/api/cube/rendoblim/data/csv/en"
+    schedule: "monthly"
+    schedule_tz: "Europe/Zurich"
+    rate_type: "zero_spot"
+    curve_family: "nominal_government"
+    compounding: "annual"
+    day_count: "source_native"
+    fit_method: "official"
+    source_native_tenors:
+      - "1Y"
+      - "2Y"
+      - "3Y"
+      - "5Y"
+      - "7Y"
+      - "10Y"
+      - "15Y"
+      - "20Y"
+      - "30Y"
 
   australia_rba:
     enabled: true

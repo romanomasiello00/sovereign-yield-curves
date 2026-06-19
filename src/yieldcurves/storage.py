@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,6 +55,15 @@ def _empty_dataframe() -> pd.DataFrame:
 
 
 def _base_dir() -> Path:
+    """Root data directory.
+
+    Defaults to the in-repo ``data/`` folder. Set ``YIELDCURVES_DATA_DIR`` to
+    relocate the store off an unstable/synced volume (e.g. iCloud Desktop), which
+    avoids intermittent IO timeouts and conflict copies on the large parquet files.
+    """
+    override = os.environ.get("YIELDCURVES_DATA_DIR")
+    if override:
+        return Path(override).expanduser().resolve()
     return Path(__file__).resolve().parent.parent.parent / "data"
 
 

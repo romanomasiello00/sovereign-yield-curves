@@ -13,6 +13,11 @@ fi
 
 export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 
+# Data store lives OFF the iCloud/Desktop volume for IO stability (avoids the
+# intermittent "Operation timed out" + conflict-copy corruption on the large
+# parquet files). Override with YIELDCURVES_DATA_DIR if needed.
+export YIELDCURVES_DATA_DIR="${YIELDCURVES_DATA_DIR:-$HOME/yield_curves_store}"
+
 cd "$ROOT"
 
 "$PYTHON_BIN" -m yieldcurves.cli sync --all

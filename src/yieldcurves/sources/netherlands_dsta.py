@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 
@@ -236,8 +237,53 @@ def _download(url: str) -> bytes:
     return resp.content
 
 
+def _abs_url(href: str, site_base: str) -> str:
+    if href.startswith("http"):
+        return href
+    return f"{site_base.rstrip('/')}/{href.lstrip('/')}"
+
+
+def _extract_doc_page_url(landing_html: str, site_base: str) -> str | None:
+    """Find the '...yields-on-dsls-from-2010-onwards' document-page link."""
+    m = re.search(
+        r'href="([^"]*yields-on-dsls-from-2010-onwards[^"]*)"',
+        landing_html,
+        re.IGNORECASE,
+    )
+    return _abs_url(m.group(1), site_base) if m else None
+
+
+def _extract_ods_url(doc_html: str, site_base: str) -> str | None:
+    """Find the .ods download link on the document page."""
+    m = re.search(r'href="([^"]*\.ods)"', doc_html, re.IGNORECASE)
+    return _abs_url(m.group(1), site_base) if m else None
+
+
+def _resolve_from_2010_url() -> str:
+    """Resolve the current 2010+ ODS link via DSTA's stable landing page.
+
+    DSTA rotates the dated binary path (e.g. /documents/2026/06/02/...), so the
+    hardcoded config URL goes stale (404). Discover it live; fall back to config.
+    """
+    fallback = _CFG["urls"]["from_2010"]
+    landing_url = _CFG.get("landing_url")
+    site_base = _CFG.get("site_base", "https://english.dsta.nl")
+    if not landing_url:
+        return fallback
+    try:
+        landing = _download(landing_url).decode("utf-8", errors="ignore")
+        doc_page = _extract_doc_page_url(landing, site_base)
+        if not doc_page:
+            return fallback
+        doc = _download(doc_page).decode("utf-8", errors="ignore")
+        ods = _extract_ods_url(doc, site_base)
+        return ods or fallback
+    except Exception:
+        return fallback
+
+
 def fetch_from_2010() -> list[dict[str, Any]]:
-    url = _CFG["urls"]["from_2010"]
+    url = _resolve_from_2010_url()
     data = _download(url)
     save_raw(data, "mts-fixings-publicatie.ods")
     h = compute_data_hash(data)

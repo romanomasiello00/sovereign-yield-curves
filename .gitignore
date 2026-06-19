@@ -11,7 +11,13 @@ data/raw/*.csv
 data/raw/*.zip
 data/raw/*.xlsx
 data/raw/*.ods
+data/raw/*.json
+data/raw/*.html
 !data/raw/.gitkeep
+
+# Stray iCloud conflict copies
+*\ 2.parquet
+*\ 2.duckdb
 
 # DuckDB (regenerated from Parquet on sync via sync_duckdb_after_write)
 *.duckdb
