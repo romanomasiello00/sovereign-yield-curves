@@ -176,12 +176,33 @@ def duckdb_path() -> Path:
     return processed_dir() / "yield_curves.duckdb"
 
 
+def _quarantine_corrupt_parquet(path: Path):
+    suffix = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    quarantine_path = path.with_name(f"{path.stem}.corrupt.{suffix}{path.suffix}")
+    try:
+        path.rename(quarantine_path)
+    except OSError:
+        pass
+
+
+def _read_parquet_or_default(
+    path: Path,
+    default: pd.DataFrame,
+) -> pd.DataFrame:
+    if not path.exists():
+        return default
+
+    try:
+        return pd.read_parquet(path)
+    except Exception:
+        _quarantine_corrupt_parquet(path)
+        return default
+
+
 def load_latest(latest_path: Path | None = None) -> pd.DataFrame:
     if latest_path is None:
         latest_path = processed_dir() / "yield_curves_latest.parquet"
-    if latest_path.exists():
-        return pd.read_parquet(latest_path)
-    return _empty_dataframe()
+    return _read_parquet_or_default(latest_path, _empty_dataframe())
 
 
 def open_duckdb() -> duckdb.DuckDBPyConnection:
@@ -308,11 +329,8 @@ def append_history(
         history_path = processed_dir() / "yield_curves_history.parquet"
     if new_rows.empty:
         return history_path
-    if history_path.exists():
-        existing = pd.read_parquet(history_path)
-        combined = pd.concat([existing, new_rows], ignore_index=True)
-    else:
-        combined = new_rows
+    existing = _read_parquet_or_default(history_path, _empty_dataframe())
+    combined = pd.concat([existing, new_rows], ignore_index=True) if not existing.empty else new_rows
     write_parquet(combined, history_path)
     return history_path
 
@@ -324,7 +342,7 @@ def replace_country_history(
 ) -> Path:
     if history_path is None:
         history_path = processed_dir() / "yield_curves_history.parquet"
-    existing = pd.read_parquet(history_path) if history_path.exists() else _empty_dataframe()
+    existing = _read_parquet_or_default(history_path, _empty_dataframe())
     kept = existing[existing["country_code"] != country_code] if not existing.empty else existing
     combined = pd.concat([kept, new_rows], ignore_index=True) if not new_rows.empty else kept
     write_parquet(combined, history_path)
@@ -361,7 +379,7 @@ def replace_country_latest(
 ) -> Path:
     if latest_path is None:
         latest_path = processed_dir() / "yield_curves_latest.parquet"
-    existing = pd.read_parquet(latest_path) if latest_path.exists() else _empty_dataframe()
+    existing = _read_parquet_or_default(latest_path, _empty_dataframe())
     kept = existing[existing["country_code"] != country_code] if not existing.empty else existing
     combined = pd.concat([kept, new_rows], ignore_index=True) if not new_rows.empty else kept
     write_parquet(combined, latest_path)
@@ -370,12 +388,10 @@ def replace_country_latest(
 
 def load_source_registry() -> pd.DataFrame:
     path = metadata_dir() / "source_registry.parquet"
-    if path.exists():
-        try:
-            return pd.read_parquet(path)
-        except Exception:
-            return pd.DataFrame(columns=["source_id", "last_observation_date", "last_raw_file_hash"])
-    return pd.DataFrame(columns=["source_id", "last_observation_date", "last_raw_file_hash"])
+    return _read_parquet_or_default(
+        path,
+        pd.DataFrame(columns=["source_id", "last_observation_date", "last_raw_file_hash"]),
+    )
 
 
 def save_source_registry(df: pd.DataFrame):
@@ -385,15 +401,11 @@ def save_source_registry(df: pd.DataFrame):
 
 def load_ingestion_log() -> pd.DataFrame:
     path = metadata_dir() / "ingestion_log.parquet"
-    if path.exists():
-        try:
-            return pd.read_parquet(path)
-        except Exception:
-            return pd.DataFrame(
-                columns=["source_id", "ingestion_timestamp", "status", "rows_added", "raw_file_hash"]
-            )
-    return pd.DataFrame(
+    return _read_parquet_or_default(
+        path,
+        pd.DataFrame(
         columns=["source_id", "ingestion_timestamp", "status", "rows_added", "raw_file_hash"]
+        ),
     )
 
 

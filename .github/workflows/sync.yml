@@ -36,6 +36,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: sync-yield-curves-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -68,6 +72,16 @@ jobs:
         id: target
         run: |
           INPUT="${{ github.event.inputs.target }}"
+          SCHEDULE="${{ github.event.schedule }}"
+          if [[ -n "$SCHEDULE" ]]; then
+            case "$SCHEDULE" in
+              "0 8 10 * *"|"0 8 15 2,5,8,11 *"|"0 8 30 4 *"|"0 8 30 4,10 *")
+                echo "flag=" >> $GITHUB_OUTPUT
+                echo "bds_flag=--workers 4" >> $GITHUB_OUTPUT
+                exit 0
+                ;;
+            esac
+          fi
           if [[ -z "$INPUT" || "$INPUT" == "ALL" ]]; then
             echo "flag=--all" >> $GITHUB_OUTPUT
             echo "bds_flag=" >> $GITHUB_OUTPUT
@@ -84,10 +98,43 @@ jobs:
         run: |
           yieldcurves sync ${{ steps.target.outputs.flag }}
 
-      - name: Sync BDS data
-        if: steps.target.outputs.bds_flag != '' || steps.target.outputs.flag == '--all'
+      - name: Check latest parquet artifact source
+        id: latest
+        if: success() && steps.target.outputs.flag != ''
         run: |
-          yieldcurves bds sync -w 4
+          if [ ! -f data/processed/yield_curves_latest.parquet ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if head -c 64 data/processed/yield_curves_latest.parquet | grep -q "git-lfs"; then
+            echo "latest parquet is only an LFS pointer; skipping macro dispatch"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload latest parquet artifact
+        if: success() && steps.latest.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: yield-curves-latest
+          path: data/processed/yield_curves_latest.parquet
+          retention-days: 7
+          compression-level: 0
+
+      - name: Notify macro_database (refresh webapp)
+        if: success() && steps.latest.outputs.ready == 'true'
+        run: |
+          curl -sf -X POST \
+            -H "Authorization: token ${{ secrets.MACRO_DB_DISPATCH_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/romanomasiello00/macro_database/dispatches \
+            -d '{"event_type":"provider-updated","client_payload":{"provider":"yieldcurves","source_repo":"romanomasiello00/sovereign-yield-curves","source_run_id":"${{ github.run_id }}","artifact_name":"yield-curves-latest"}}'
+
+      - name: Sync BDS data
+        if: steps.target.outputs.bds_flag != ''
+        run: |
+          yieldcurves bds sync ${{ steps.target.outputs.bds_flag }}
 
       - name: Validate outputs
         run: |
@@ -99,11 +146,18 @@ jobs:
         run: |
           git config user.name "yield-curve-bot"
           git config user.email "yield-curve-bot@users.noreply.github.com"
-          git add data/ metadata/
+          git add data/
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
             git commit -m "chore: update yield curve data [skip ci]"
+            for attempt in 1 2 3; do
+              if git push; then
+                exit 0
+              fi
+              echo "Push failed; rebasing on latest origin/main (attempt $attempt)"
+              git pull --rebase origin main
+            done
             git push
           fi
 
